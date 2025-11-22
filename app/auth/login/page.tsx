@@ -79,6 +79,7 @@ export default function LoginPage() {
           <div className="mb-4 flex justify-center -mt-30">
             <Image src={log} alt="EDUNICA Logo" width={320} height={240} className="drop-shadow-lg" sizes="(min-width: 1024px) 320px, 200px" />
           </div>
+          {/* (removed desktop video from left column - moved to right column above the form) */}
           <h1 className="text-2xl font-bold text-gray-800 mb-2 -mt-20">EDUNICA</h1>
 
           <div className="mt-4 space-y-2">
@@ -109,6 +110,21 @@ export default function LoginPage() {
           {/* Mobile logo */}
           <div className="md:hidden mb-8 flex justify-center">
             <Image src={log} alt="EDUNICA Logo" width={200} height={200} className="drop-shadow-lg" sizes="(min-width: 1024px) 360px, 200px" />
+          </div>
+          {/* Mobile animation under logo */}
+          <div className="md:hidden flex justify-center mb-8">
+            <video preload="auto" autoPlay muted loop playsInline className="w-48 h-36 object-cover rounded-lg" aria-hidden="true">
+              <source src="/welcome.mp4" type="video/mp4" />
+              Your browser does not support the video tag.
+            </video>
+          </div>
+
+          {/* Desktop animation above the inputs (visible on md and up) */}
+          <div className="hidden md:flex justify-center mb-8">
+            <video preload="auto" autoPlay muted loop playsInline className="w-96 h-56 object-cover rounded-lg shadow-lg" aria-hidden="true">
+              <source src="/welcome.mp4" type="video/mp4" />
+              Your browser does not support the video tag.
+            </video>
           </div>
 
           <div className="mb-8">

@@ -102,6 +102,22 @@ export default function DashboardLayout({
           </SidebarGroup>
 
           <SidebarGroup>
+            <SidebarGroupLabel>Recursos</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <a href="/dashboard/library">
+                      <BookOpen className="w-4 h-4" />
+                      <span>Biblioteca</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
             <SidebarGroupLabel>Configuración</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
