@@ -1,14 +1,15 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Edit, Trash2, Volume2, Video, Search } from "lucide-react"
+import { Plus, Edit, Trash2, Volume2, Video, Search, Upload, Loader2, Tag } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface GlossaryEntry {
   id: string
@@ -16,6 +17,11 @@ interface GlossaryEntry {
   definition: string
   audio_url: string | null
   lsn_video_url: string | null
+  lsn_video_storage_path: string | null
+  category: string | null
+  example_sentence: string | null
+  handshape: string | null
+  difficulty: string | null
 }
 
 interface ManageGlossaryProps {
@@ -28,14 +34,41 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
   const [searchTerm, setSearchTerm] = useState("")
   const [showDialog, setShowDialog] = useState(false)
   const [editingEntry, setEditingEntry] = useState<GlossaryEntry | null>(null)
-  const [formData, setFormData] = useState({ term: "", definition: "", audio_url: "", lsn_video_url: "" })
+  const [formData, setFormData] = useState({
+    term: "",
+    definition: "",
+    audio_url: "",
+    lsn_video_url: "",
+    category: "",
+    example_sentence: "",
+    handshape: "",
+    difficulty: "",
+  })
   const [error, setError] = useState("")
+  const [videoFile, setVideoFile] = useState<File | null>(null)
+  const [uploadingVideo, setUploadingVideo] = useState(false)
+
+  const categoryOptions = useMemo(() => [
+    "Lengua y Literatura",
+    "Matemáticas",
+    "Ciencias",
+    "Vida diaria",
+    "Emociones",
+    "Otro",
+  ], [])
+
+  const difficultyOptions = useMemo(() => [
+    { value: "basico", label: "Básico" },
+    { value: "intermedio", label: "Intermedio" },
+    { value: "avanzado", label: "Avanzado" },
+  ], [])
 
   useEffect(() => {
     loadGlossary()
   }, [classId])
 
   const loadGlossary = async () => {
+    setLoading(true)
     try {
       const supabase = getSupabaseClient()
       const { data, error } = await supabase
@@ -66,43 +99,74 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
 
     try {
       const supabase = getSupabaseClient()
+      let videoStoragePath = editingEntry?.lsn_video_storage_path || null
+
+      const sanitizeFilename = (name: string) => {
+        const base = name.split(/[\/\\]/).pop() || name
+        const noDiacritics = base.normalize("NFD").replace(/\p{Diacritic}/gu, "")
+        return noDiacritics.replace(/[^a-zA-Z0-9._-]/g, "_")
+      }
+
+      if (videoFile) {
+        setUploadingVideo(true)
+        try {
+          const ext = videoFile.name.includes(".") ? videoFile.name.split(".").pop() : ""
+          const rawBase = videoFile.name.replace(/\.[^/.]+$/, "")
+          const safeBase = sanitizeFilename(rawBase)
+          const filename = `${Date.now()}-${safeBase}${ext ? "." + ext : ""}`
+          const path = `glossary/${classId}/${filename}`
+          const uploadResp = await supabase.storage.from("library").upload(path, videoFile, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: videoFile.type || "video/mp4",
+          })
+          if (uploadResp.error) throw uploadResp.error
+          videoStoragePath = path
+        } finally {
+          setUploadingVideo(false)
+        }
+      }
+
+      const payload = {
+        term: formData.term,
+        definition: formData.definition,
+        audio_url: formData.audio_url || null,
+        lsn_video_url: formData.lsn_video_url || null,
+        lsn_video_storage_path: videoStoragePath,
+        category: formData.category || null,
+        example_sentence: formData.example_sentence || null,
+        handshape: formData.handshape || null,
+        difficulty: formData.difficulty || null,
+      }
 
       if (editingEntry) {
         const resp = await supabase
           .from("glossary")
-          .update({
-            term: formData.term,
-            definition: formData.definition,
-            audio_url: formData.audio_url || null,
-            lsn_video_url: formData.lsn_video_url || null,
-          })
+          .update(payload)
           .eq("id", editingEntry.id)
 
         console.debug("update glossary response:", resp)
         if (resp.error) throw resp.error
-        setEntries(entries.map((e) => (e.id === editingEntry.id ? { ...e, ...formData } : e)))
       } else {
         const resp = await supabase
           .from("glossary")
           .insert([
             {
               class_id: classId,
-              term: formData.term,
-              definition: formData.definition,
-              audio_url: formData.audio_url || null,
-              lsn_video_url: formData.lsn_video_url || null,
+              ...payload,
             },
           ])
           .select()
 
         console.debug("insert glossary response:", resp)
         if (resp.error) throw resp.error
-        setEntries([...entries, resp.data ? resp.data[0] : ({} as GlossaryEntry)])
       }
-
+      await loadGlossary()
       setShowDialog(false)
       setEditingEntry(null)
-      setFormData({ term: "", definition: "", audio_url: "", lsn_video_url: "" })
+      setFormData({ term: "", definition: "", audio_url: "", lsn_video_url: "", category: "", example_sentence: "", handshape: "", difficulty: "" })
+      setVideoFile(null)
+      setError("")
     } catch (error: any) {
       setError(error.message || "Error al guardar")
     }
@@ -132,10 +196,16 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
         definition: entry.definition,
         audio_url: entry.audio_url || "",
         lsn_video_url: entry.lsn_video_url || "",
+        category: entry.category || "",
+        example_sentence: entry.example_sentence || "",
+        handshape: entry.handshape || "",
+        difficulty: entry.difficulty || "",
       })
+      setVideoFile(null)
     } else {
       setEditingEntry(null)
-      setFormData({ term: "", definition: "", audio_url: "", lsn_video_url: "" })
+      setFormData({ term: "", definition: "", audio_url: "", lsn_video_url: "", category: "", example_sentence: "", handshape: "", difficulty: "" })
+      setVideoFile(null)
     }
     setShowDialog(true)
   }
@@ -145,6 +215,8 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
       e.term.toLowerCase().includes(searchTerm.toLowerCase()) ||
       e.definition.toLowerCase().includes(searchTerm.toLowerCase()),
   )
+
+  const categoryChips = Array.from(new Set(entries.map((e) => e.category).filter(Boolean)))
 
   if (loading) {
     return <div className="text-muted-foreground">Cargando glosario...</div>
@@ -167,6 +239,17 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
           Nuevo Término
         </Button>
       </div>
+
+      {categoryChips.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {categoryChips.map((cat) => (
+            <Badge key={cat as string} variant="secondary" className="flex items-center gap-1 text-xs">
+              <Tag className="w-3 h-3" />
+              {cat}
+            </Badge>
+          ))}
+        </div>
+      )}
 
       {filteredEntries.length === 0 ? (
         <Card>
@@ -193,7 +276,20 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-sm text-muted-foreground">{entry.definition}</p>
+                {entry.example_sentence && (
+                  <p className="text-xs italic text-muted-foreground">Ejemplo: {entry.example_sentence}</p>
+                )}
                 <div className="flex gap-2 flex-wrap">
+                  {entry.category && (
+                    <Badge variant="secondary" className="text-xs">
+                      {entry.category}
+                    </Badge>
+                  )}
+                  {entry.difficulty && (
+                    <Badge variant="outline" className="text-xs">
+                      Nivel: {entry.difficulty}
+                    </Badge>
+                  )}
                   {entry.audio_url && (
                     <Badge variant="outline" className="flex items-center gap-1">
                       <Volume2 className="w-3 h-3" />
@@ -206,6 +302,12 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
                       LSN
                     </Badge>
                   )}
+                  {entry.lsn_video_storage_path && (
+                    <Badge variant="outline" className="flex items-center gap-1">
+                      <Video className="w-3 h-3" />
+                      Video privado
+                    </Badge>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -214,7 +316,7 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
       )}
 
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingEntry ? "Editar Término" : "Nuevo Término"}</DialogTitle>
             <DialogDescription>Agrega multimedia en Lengua de Señas Nicaragüense</DialogDescription>
@@ -239,6 +341,65 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
               />
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Categoría</label>
+                <Select
+                  value={formData.category || ""}
+                  onValueChange={(value) => setFormData({ ...formData, category: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categoryOptions.map((opt) => (
+                      <SelectItem key={opt} value={opt}>
+                        {opt}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Nivel</label>
+                <Select
+                  value={formData.difficulty || ""}
+                  onValueChange={(value) => setFormData({ ...formData, difficulty: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {difficultyOptions.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Ejemplo en contexto</label>
+              <Textarea
+                value={formData.example_sentence}
+                onChange={(e) => setFormData({ ...formData, example_sentence: e.target.value })}
+                placeholder="Escribe una oración o situación donde se use el término"
+                rows={2}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Configuración de la mano (opcional)</label>
+              <Input
+                value={formData.handshape}
+                onChange={(e) => setFormData({ ...formData, handshape: e.target.value })}
+                placeholder="Ej: Mano en B abierta"
+              />
+            </div>
+
             <div>
               <label className="block text-sm font-medium mb-1">URL de Audio (opcional)</label>
               <Input
@@ -259,13 +420,28 @@ export default function ManageGlossary({ classId }: ManageGlossaryProps) {
               />
             </div>
 
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Cargar Video LSN (privado)</label>
+              <Input type="file" accept="video/*" onChange={(e) => setVideoFile(e.target.files?.[0] ?? null)} />
+              {videoFile && <p className="text-xs text-muted-foreground">Archivo seleccionado: {videoFile.name}</p>}
+              {editingEntry?.lsn_video_storage_path && !videoFile && (
+                <p className="text-xs text-muted-foreground">Video existente: {editingEntry.lsn_video_storage_path}</p>
+              )}
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Upload className="w-3 h-3" /> Se sanitiza el nombre y se almacena de forma privada.
+              </p>
+            </div>
+
             {error && <div className="text-sm text-destructive">{error}</div>}
 
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => setShowDialog(false)}>
                 Cancelar
               </Button>
-              <Button onClick={handleSave}>{editingEntry ? "Actualizar" : "Crear"}</Button>
+              <Button onClick={handleSave} disabled={uploadingVideo}>
+                {uploadingVideo && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {editingEntry ? "Actualizar" : "Crear"}
+              </Button>
             </div>
           </div>
         </DialogContent>

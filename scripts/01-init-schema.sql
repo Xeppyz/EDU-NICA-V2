@@ -44,8 +44,20 @@ CREATE TABLE IF NOT EXISTS glossary (
   definition TEXT NOT NULL,
   audio_url TEXT,
   lsn_video_url TEXT,
+  lsn_video_storage_path TEXT,
+  category TEXT,
+  example_sentence TEXT,
+  handshape TEXT,
+  difficulty TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+ALTER TABLE IF EXISTS public.glossary
+  ADD COLUMN IF NOT EXISTS lsn_video_storage_path TEXT,
+  ADD COLUMN IF NOT EXISTS category TEXT,
+  ADD COLUMN IF NOT EXISTS example_sentence TEXT,
+  ADD COLUMN IF NOT EXISTS handshape TEXT,
+  ADD COLUMN IF NOT EXISTS difficulty TEXT;
 
 -- Create activities table for interactive exercises
 CREATE TABLE IF NOT EXISTS activities (
@@ -103,10 +115,18 @@ CREATE TABLE IF NOT EXISTS challenges (
   teacher_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   description TEXT,
-  -- types for the challenge (multiple choice, fill blank, select image, matching, dragdrop, coding, open_ended)
-  type TEXT NOT NULL CHECK (type IN ('multiple_choice','fill_blank','select_image','matching','dragdrop','coding','open_ended')) DEFAULT 'multiple_choice',
+  -- types for the challenge (multiple choice, fill blank, select image, matching, dragdrop, coding, open_ended, sign_practice)
+  type TEXT NOT NULL CHECK (type IN ('multiple_choice','fill_blank','select_image','matching','dragdrop','coding','open_ended','sign_practice')) DEFAULT 'multiple_choice',
   -- payload holds question/choices/media in a flexible JSONB shape
   payload JSONB,
+  -- optional structured rubric definition (array of criteria with weights)
+  rubric JSONB,
+  -- optional target score teachers can override per challenge (used by rubric scoring)
+  max_score NUMERIC DEFAULT 100,
+  -- optional reference video for sign practice prompts
+  reference_video_storage_path TEXT,
+  reference_video_duration_seconds INTEGER,
+  reference_video_transcript TEXT,
   start_at TIMESTAMP WITH TIME ZONE,
   due_at TIMESTAMP WITH TIME ZONE,
   attempts_allowed INTEGER DEFAULT 1,
@@ -121,9 +141,47 @@ CREATE TABLE IF NOT EXISTS challenge_responses (
   student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   answers JSONB NOT NULL,
   score NUMERIC,
+  rubric_scores JSONB,
+  teacher_feedback TEXT,
+  review_status TEXT NOT NULL CHECK (review_status IN ('pending','needs_revision','approved')) DEFAULT 'pending',
+  reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMP WITH TIME ZONE,
+  submission_storage_path TEXT,
+  submission_duration_seconds INTEGER,
+  submission_transcript TEXT,
   completed_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Ensure the challenges.type constraint includes new experiential types
+ALTER TABLE IF EXISTS public.challenges
+  DROP CONSTRAINT IF EXISTS challenges_type_check;
+
+ALTER TABLE IF EXISTS public.challenges
+  ADD CONSTRAINT challenges_type_check CHECK (type IN ('multiple_choice','fill_blank','select_image','matching','dragdrop','coding','open_ended','sign_practice'));
+
+-- Backfill columns for experiential sign practice metadata (idempotent)
+ALTER TABLE IF EXISTS public.challenges
+  ADD COLUMN IF NOT EXISTS rubric JSONB,
+  ADD COLUMN IF NOT EXISTS max_score NUMERIC DEFAULT 100,
+  ADD COLUMN IF NOT EXISTS reference_video_storage_path TEXT,
+  ADD COLUMN IF NOT EXISTS reference_video_duration_seconds INTEGER,
+  ADD COLUMN IF NOT EXISTS reference_video_transcript TEXT;
+
+ALTER TABLE IF EXISTS public.challenge_responses
+  ADD COLUMN IF NOT EXISTS rubric_scores JSONB,
+  ADD COLUMN IF NOT EXISTS teacher_feedback TEXT,
+  ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending' CHECK (review_status IN ('pending','needs_revision','approved')),
+  ADD COLUMN IF NOT EXISTS reviewer_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP WITH TIME ZONE,
+  ADD COLUMN IF NOT EXISTS submission_storage_path TEXT,
+  ADD COLUMN IF NOT EXISTS submission_duration_seconds INTEGER,
+  ADD COLUMN IF NOT EXISTS submission_transcript TEXT;
+
+-- Helpful indexes for reporting & reviews
+CREATE INDEX IF NOT EXISTS idx_challenges_class_id ON public.challenges(class_id);
+CREATE INDEX IF NOT EXISTS idx_challenge_responses_challenge_id ON public.challenge_responses(challenge_id);
+CREATE INDEX IF NOT EXISTS idx_challenge_responses_student_id ON public.challenge_responses(student_id);
 
 -- Create student progress tracking
 CREATE TABLE IF NOT EXISTS student_progress (
@@ -508,14 +566,23 @@ CREATE POLICY "Teachers can view challenge responses for their classes"
     )
   );
 
-DROP POLICY IF EXISTS "Authors or teachers can update/delete challenge responses" ON public.challenge_responses;
-CREATE POLICY "Authors or teachers can update/delete challenge responses"
-  ON challenge_responses FOR ALL USING (
+DROP POLICY IF EXISTS "Authors or teachers can update challenge responses" ON public.challenge_responses;
+CREATE POLICY "Authors or teachers can update challenge responses"
+  ON challenge_responses FOR UPDATE USING (
     student_id = auth.uid()
     OR EXISTS (
       SELECT 1 FROM challenges c JOIN classes cl ON cl.id = c.class_id WHERE c.id = challenge_responses.challenge_id AND cl.teacher_id = auth.uid()
     )
   ) WITH CHECK (
+    student_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM challenges c JOIN classes cl ON cl.id = c.class_id WHERE c.id = challenge_responses.challenge_id AND cl.teacher_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Authors or teachers can delete challenge responses" ON public.challenge_responses;
+CREATE POLICY "Authors or teachers can delete challenge responses"
+  ON challenge_responses FOR DELETE USING (
     student_id = auth.uid()
     OR EXISTS (
       SELECT 1 FROM challenges c JOIN classes cl ON cl.id = c.class_id WHERE c.id = challenge_responses.challenge_id AND cl.teacher_id = auth.uid()
