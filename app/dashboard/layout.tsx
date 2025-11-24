@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 import { getCurrentUser } from "@/lib/supabase/auth-client"
 import {
   SidebarProvider,
@@ -32,6 +32,7 @@ export default function DashboardLayout({
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
+  const pathname = usePathname()
 
   useEffect(() => {
     async function checkAuth() {
@@ -82,7 +83,7 @@ export default function DashboardLayout({
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive>
+                  <SidebarMenuButton asChild isActive={pathname === '/dashboard' || pathname === '/dashboard/'}>
                     <a href="/dashboard">
                       <BookOpen className="w-4 h-4" />
                       <span>Mis Clases</span>
@@ -90,7 +91,7 @@ export default function DashboardLayout({
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
+                  <SidebarMenuButton asChild isActive={pathname?.startsWith('/dashboard/settings')}>
                     <a href="/dashboard/settings">
                       <Settings className="w-4 h-4" />
                       <span>Configuración</span>
@@ -106,7 +107,7 @@ export default function DashboardLayout({
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
+                  <SidebarMenuButton asChild isActive={pathname?.startsWith('/dashboard/library')}>
                     <a href="/dashboard/library">
                       <BookOpen className="w-4 h-4" />
                       <span>Biblioteca</span>

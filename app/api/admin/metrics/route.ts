@@ -1,177 +1,202 @@
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 import { getSupabaseServerClient } from '@/lib/supabase/server'
+
+interface UserRow { id: string; role: string | null }
+interface ClassRow { id: string; teacher_id: string | null; name: string | null }
+interface EnrollmentRow { class_id: string | null; student_id: string | null; teacher_id: string | null }
+interface ProgressRow { class_id: string | null; progress_percentage: number | null; student_id: string | null }
+interface ResponseRow { student_id: string | null; score: number | null; evaluation_id: string | null }
 
 export async function GET() {
     try {
-        const supabase = await getSupabaseServerClient()
+        // Intentar usar service role para evitar RLS en métricas agregadas.
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+        const supabase = (url && serviceKey)
+            ? createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } })
+            : await getSupabaseServerClient()
 
-        // helper: extract numeric score from answers JSONB (flexible to different shapes)
-        function extractScoreFromAnswers(answers: any): number | null {
-            if (!answers) return null
-            const toNum = (v: any) => {
-                if (v == null) return null
-                const n = Number(v)
-                return Number.isFinite(n) ? n : null
+        // Usuarios y roles
+        let usersError: string | null = null
+        const { data: usersRows, error: usersErr } = await supabase.from('users').select('id,role')
+        if (usersErr) usersError = usersErr.message
+        const users: UserRow[] = (usersRows || []) as UserRow[]
+        const distinctRoles = Array.from(new Set(users.map((u: UserRow) => String(u.role))))
+
+        const roleNorm = (r: any) => String(r || '').toLowerCase().trim()
+        const studentRoleSet = new Set(['student', 'estudiante'])
+        // Tratamos 'admin' también como docente para métricas si no existen roles teacher.
+        const teacherRoleSet = new Set(['teacher', 'docente', 'admin'])
+        const studentsCountDirect = users.filter(u => studentRoleSet.has(roleNorm(u.role))).length
+        const teachersCountDirect = users.filter(u => teacherRoleSet.has(roleNorm(u.role))).length
+
+        // Clases
+        const { data: classesRows, error: classesErr } = await supabase.from('classes').select('id,teacher_id,name')
+        const classes: ClassRow[] = (classesRows || []) as ClassRow[]
+        const teacherDistinctFromClasses = new Set(classes.map(c => c.teacher_id).filter(Boolean)).size
+
+        // Matriculaciones
+        const { data: enrollRows, error: enrollErr } = await supabase.from('class_enrollments').select('class_id,student_id,teacher_id')
+        const enrollments: EnrollmentRow[] = (enrollRows || []) as EnrollmentRow[]
+        const studentDistinctFromEnrollments = new Set(enrollments.map(e => e.student_id).filter(Boolean)).size
+        const enrollmentsPerClass: Record<string, number> = {}
+        enrollments.forEach((e: EnrollmentRow) => {
+            if (!e.class_id) return
+            enrollmentsPerClass[e.class_id] = (enrollmentsPerClass[e.class_id] || 0) + 1
+        })
+
+        // Progreso (incluye student_id para fallback de conteo)
+        const { data: progressRowsData, error: progressErr } = await supabase.from('student_progress').select('class_id,progress_percentage,student_id')
+        const progressRows: ProgressRow[] = (progressRowsData || []) as ProgressRow[]
+        const progressAgg: Record<string, { sum: number; count: number }> = {}
+        progressRows.forEach((p: ProgressRow) => {
+            const cid = p.class_id
+            const val = Number(p.progress_percentage)
+            if (!cid || Number.isNaN(val)) return
+            if (!progressAgg[cid]) progressAgg[cid] = { sum: 0, count: 0 }
+            progressAgg[cid].sum += val
+            progressAgg[cid].count += 1
+        })
+        const globalProgressVals = progressRows.map((p: ProgressRow) => Number(p.progress_percentage)).filter((n: number) => Number.isFinite(n))
+        const overallAvgProgress = globalProgressVals.length ? globalProgressVals.reduce((a: number, b: number) => a + b, 0) / globalProgressVals.length : null
+
+        // Respuestas / puntajes
+        const { data: responseRowsData, error: responsesErr } = await supabase.from('student_responses').select('student_id,score,evaluation_id')
+        const responseRows: ResponseRow[] = (responseRowsData || []) as ResponseRow[]
+        const globalScores = responseRows.map((r: ResponseRow) => Number(r.score)).filter((n: number) => Number.isFinite(n))
+        const avgScore = globalScores.length ? globalScores.reduce((a: number, b: number) => a + b, 0) / globalScores.length : null
+
+        // Top estudiantes
+        const scorePerStudent: Record<string, { sum: number; count: number }> = {}
+        responseRows.forEach((r: ResponseRow) => {
+            const sid = r.student_id
+            const sc = Number(r.score)
+            if (!sid || !Number.isFinite(sc)) return
+            if (!scorePerStudent[sid]) scorePerStudent[sid] = { sum: 0, count: 0 }
+            scorePerStudent[sid].sum += sc
+            scorePerStudent[sid].count += 1
+        })
+        const topStudents = Object.entries(scorePerStudent)
+            .map(([sid, v]) => ({ id: sid, avg: v.sum / v.count }))
+            .sort((a: { id: string; avg: number }, b: { id: string; avg: number }) => b.avg - a.avg)
+            .slice(0, 5)
+
+        // Top docentes (por alumnos inscritos)
+        const teacherStudentCounts: Record<string, number> = {}
+        enrollments.forEach((e: EnrollmentRow) => {
+            const tid = e.teacher_id
+            if (!tid) return
+            teacherStudentCounts[tid] = (teacherStudentCounts[tid] || 0) + 1
+        })
+        const topTeachers = Object.entries(teacherStudentCounts)
+            .map(([tid, count]) => ({ id: tid, count }))
+            .sort((a: { id: string; count: number }, b: { id: string; count: number }) => b.count - a.count)
+            .slice(0, 5)
+
+        // JOIN con users para enriquecer nombres/correos en top lists y clases
+        const joinIds = Array.from(new Set([
+            ...topStudents.map(s => s.id),
+            ...topTeachers.map(t => t.id),
+            ...classes.map(c => c.teacher_id).filter(Boolean) as string[],
+        ]))
+        let userJoinError: string | null = null
+        let userMap: Record<string, { id: string; full_name: string | null; email: string | null; role: string | null }> = {}
+        if (joinIds.length) {
+            const { data: joinUsers, error: joinErr } = await supabase.from('users').select('id,full_name,email,role').in('id', joinIds)
+            if (joinErr) {
+                userJoinError = joinErr.message
+            } else if (joinUsers) {
+                userMap = Object.fromEntries(joinUsers.map((u: { id: string; full_name?: string | null; email?: string | null; role?: string | null }) => [
+                    u.id,
+                    {
+                        id: u.id,
+                        full_name: u.full_name ?? null,
+                        email: u.email ?? null,
+                        role: u.role ?? null,
+                    }
+                ]))
             }
+        }
 
-            // common direct locations
-            const direct = toNum(answers.score) ?? toNum(answers?.meta?.score) ?? toNum(answers?.summary?.score)
-            if (direct != null) return direct
+        const enrichedTopStudents = topStudents.map(s => ({ ...s, user: userMap[s.id] || null }))
+        const enrichedTopTeachers = topTeachers.map(t => ({ ...t, user: userMap[t.id] || null }))
 
-            // look for items/questions array with per-item score or correct flags
-            const items = answers.items || answers.questions || answers.responses
-            if (Array.isArray(items) && items.length) {
-                // sum numeric item.score if present
-                const itemScores = items.map((it: any) => toNum(it?.score)).filter((x: any): x is number => x != null)
-                if (itemScores.length) return itemScores.reduce((a: number, b: number) => a + b, 0)
-
-                // fallback: count correct flags (treat each correct as 1)
-                const correct = items.filter((it: any) => it?.correct === true || it?.isCorrect === true).length
-                if (correct) return correct
+        // Per-class distinct students from progress (si enrollments vacío aún contamos)
+        const progressStudentsPerClass: Record<string, Set<string>> = {}
+        progressRows.forEach((p: ProgressRow) => {
+            if (p.class_id && p.student_id) {
+                if (!progressStudentsPerClass[p.class_id]) progressStudentsPerClass[p.class_id] = new Set<string>()
+                progressStudentsPerClass[p.class_id].add(p.student_id)
             }
+        })
 
-            return null
-        }
-
-        // counts of users by role (public.users table)
-        const [{ count: studentsCount }, { count: teachersCount }] = await Promise.all([
-            (async () => {
-                const { count } = await supabase.from('users').select('id', { count: 'exact' }).eq('role', 'student')
-                return { count: count || 0 }
-            })(),
-            (async () => {
-                const { count } = await supabase.from('users').select('id', { count: 'exact' }).eq('role', 'teacher')
-                return { count: count || 0 }
-            })(),
-        ])
-
-        // average score across student_responses
-        // NOTE: schema stores answers as JSONB (student_responses.answers). We attempt to extract a numeric `score` field from answers.
-        const { data: responses } = await supabase.from('student_responses').select('student_id,answers')
-        const scores = (responses || []).map((r: any) => extractScoreFromAnswers(r.answers)).filter((s: any): s is number => s != null)
-        const avgScore = scores.length ? scores.reduce((a: number, b: number) => a + b, 0) / scores.length : null
-
-        // top students by average score (extract score from answers JSONB)
-        const studentMap: Record<string, { sum: number; count: number }> = {}
-            ; (responses || []).forEach((r: any) => {
-                const id = r.student_id
-                const sc = extractScoreFromAnswers(r.answers)
-                if (sc == null) return
-                if (!studentMap[id]) studentMap[id] = { sum: 0, count: 0 }
-                studentMap[id].sum += sc
-                studentMap[id].count += 1
-            })
-
-        const studentAvgs = Object.entries(studentMap).map(([id, v]) => ({ id, avg: v.sum / v.count }))
-        studentAvgs.sort((a, b) => b.avg - a.avg)
-        const topStudentIds = studentAvgs.slice(0, 5).map(s => s.id)
-
-        let topStudents: any[] = []
-        if (topStudentIds.length) {
-            const { data: users } = await supabase.from('users').select('id,email,full_name:full_name,role').in('id', topStudentIds)
-            const usersById: Record<string, any> = {}
-                ; (users || []).forEach((u: any) => (usersById[u.id] = u))
-            topStudents = studentAvgs.slice(0, 5).map(s => ({ id: s.id, avg: s.avg, user: usersById[s.id] || null }))
-        }
-
-        // top teachers by student counts (via classes + class_enrollments)
-        const { data: classes } = await supabase.from('classes').select('id,teacher_id')
-        const classById: Record<string, string> = {}
-            ; (classes || []).forEach((c: any) => { classById[c.id] = c.teacher_id })
-
-        const { data: enrollments } = await supabase.from('class_enrollments').select('class_id')
-        const teacherCounts: Record<string, number> = {}
-            ; (enrollments || []).forEach((e: any) => {
-                const tid = classById[e.class_id]
-                if (!tid) return
-                teacherCounts[tid] = (teacherCounts[tid] || 0) + 1
-            })
-
-        const teacherArr = Object.entries(teacherCounts).map(([id, count]) => ({ id, count }))
-        teacherArr.sort((a, b) => b.count - a.count)
-        const topTeacherIds = teacherArr.slice(0, 5).map(t => t.id)
-        let topTeachers: any[] = []
-        if (topTeacherIds.length) {
-            const { data: tusers } = await supabase.from('users').select('id,email,full_name,role').in('id', topTeacherIds)
-            const tById: Record<string, any> = {}
-                ; (tusers || []).forEach((u: any) => (tById[u.id] = u))
-            topTeachers = teacherArr.slice(0, 5).map(t => ({ id: t.id, count: t.count, user: tById[t.id] || null }))
-        }
-
-        // Per-class metrics: enrollments, avg progress, avg score, evaluations count
-        const { data: classesFull } = await supabase.from('classes').select('id,name,teacher_id')
-        const classIds = (classesFull || []).map((c: any) => c.id)
-
-        const { data: enrollsAll } = await supabase.from('class_enrollments').select('class_id')
-        const enrollCounts: Record<string, number> = {}
-            ; (enrollsAll || []).forEach((e: any) => { enrollCounts[e.class_id] = (enrollCounts[e.class_id] || 0) + 1 })
-
-        const { data: progressAll } = await supabase.from('student_progress').select('class_id,progress_percentage')
-        const progressMap: Record<string, { sum: number; count: number }> = {}
-            ; (progressAll || []).forEach((p: any) => {
-                const cid = p.class_id
-                const val = Number(p.progress_percentage)
-                if (Number.isNaN(val)) return
-                if (!progressMap[cid]) progressMap[cid] = { sum: 0, count: 0 }
-                progressMap[cid].sum += val
-                progressMap[cid].count += 1
-            })
-
-        // Per-class metrics: for each class follow the pattern lessons -> activities -> evaluations -> responses
-        const classesMetrics = await Promise.all((classesFull || []).map(async (c: any) => {
-            const enrollments = enrollCounts[c.id] || 0
-            const prog = progressMap[c.id]
+        // Métricas por clase (enrollments + progress + unión)
+        const classesMetrics = classes.map((c: ClassRow) => {
+            const enrollCount = enrollmentsPerClass[c.id] || 0
+            const prog = progressAgg[c.id]
+            const classStudentIdsEnroll = new Set<string>(enrollments.filter((e: EnrollmentRow) => e.class_id === c.id).map(e => e.student_id).filter((v): v is string => Boolean(v)))
+            const classStudentIdsProgress = progressStudentsPerClass[c.id] || new Set<string>()
+            const combinedClassStudentIds = new Set<string>([...Array.from(classStudentIdsEnroll), ...Array.from(classStudentIdsProgress)])
+            const classScores = responseRows
+                .filter((r: ResponseRow) => r.student_id && combinedClassStudentIds.has(r.student_id))
+                .map((r: ResponseRow) => Number(r.score))
+                .filter((n: number) => Number.isFinite(n))
+            const avg_score = classScores.length ? classScores.reduce((a: number, b: number) => a + b, 0) / classScores.length : null
             const avg_progress = prog && prog.count ? prog.sum / prog.count : null
-
-            // Get lessons for this class
-            const { data: lessonsForClass } = await supabase.from('lessons').select('id').eq('class_id', c.id)
-            const lessonIds = (lessonsForClass || []).map((l: any) => l.id)
-
-            // Get activities for those lessons
-            let activityIds: string[] = []
-            if (lessonIds.length > 0) {
-                const { data: activitiesForLessons } = await supabase.from('activities').select('id').in('lesson_id', lessonIds)
-                activityIds = (activitiesForLessons || []).map((a: any) => a.id)
-            }
-
-            // Get evaluations for those activities
-            let evaluationIds: string[] = []
-            if (activityIds.length > 0) {
-                const { data: evaluationsForActivities } = await supabase.from('evaluations').select('id').in('activity_id', activityIds)
-                evaluationIds = (evaluationsForActivities || []).map((e: any) => e.id)
-            }
-
-            // Count evaluations
-            const evaluations_count = evaluationIds.length
-
-            // Get responses for these evaluations and compute avg score
-            let avg_score: number | null = null
-            if (evaluationIds.length > 0) {
-                const { data: respData } = await supabase.from('student_responses').select('answers').in('evaluation_id', evaluationIds)
-                const scoresForClass = (respData || []).map((r: any) => extractScoreFromAnswers(r.answers)).filter((s: any): s is number => s != null)
-                if (scoresForClass.length) {
-                    avg_score = scoresForClass.reduce((a: number, b: number) => a + b, 0) / scoresForClass.length
-                }
-            }
-
             return {
                 id: c.id,
                 name: c.name || c.id,
                 teacher_id: c.teacher_id,
-                enrollments,
+                enrollments: enrollCount,
+                students_progress: classStudentIdsProgress.size,
+                students_total: combinedClassStudentIds.size,
                 avg_progress,
                 avg_score,
-                evaluations_count,
+                teacher: c.teacher_id ? userMap[c.teacher_id] || null : null,
             }
-        }))
+        })
+
+        // Fallback unión de IDs de estudiantes (matriculas, progreso, respuestas)
+        const studentIdsFromEnrollments = new Set(enrollments.map(e => e.student_id).filter(Boolean) as string[])
+        const studentIdsFromProgress = new Set(progressRows.map(p => p.student_id).filter(Boolean) as string[])
+        const studentIdsFromResponses = new Set(responseRows.map(r => r.student_id).filter(Boolean) as string[])
+        const allStudentIds = new Set<string>([...Array.from(studentIdsFromEnrollments), ...Array.from(studentIdsFromProgress), ...Array.from(studentIdsFromResponses)])
+
+        const finalStudents = studentsCountDirect || studentDistinctFromEnrollments || allStudentIds.size
+        const finalTeachers = teachersCountDirect || teacherDistinctFromClasses
 
         return NextResponse.json({
-            counts: { students: studentsCount, teachers: teachersCount },
+            counts: { students: finalStudents, teachers: finalTeachers },
             avgScore,
-            topStudents,
-            topTeachers,
-            totalResponses: scores.length,
+            overallAvgProgress,
+            topStudents: enrichedTopStudents,
+            topTeachers: enrichedTopTeachers,
+            totalResponses: globalScores.length,
             classesMetrics,
+            _debug: {
+                usersError,
+                classesErr: classesErr?.message || null,
+                enrollErr: enrollErr?.message || null,
+                progressErr: progressErr?.message || null,
+                responsesErr: responsesErr?.message || null,
+                distinctRoles,
+                studentsCountDirect,
+                teachersCountDirect,
+                studentDistinctFromEnrollments,
+                teacherDistinctFromClasses,
+                allStudentIdsCount: allStudentIds.size,
+                sourceCounts: {
+                    enrollments: studentIdsFromEnrollments.size,
+                    progress: studentIdsFromProgress.size,
+                    responses: studentIdsFromResponses.size,
+                },
+                usedServiceRole: Boolean(serviceKey),
+                envUrlPresent: Boolean(url),
+                note: !serviceKey ? 'SUPABASE_SERVICE_ROLE_KEY ausente: usando cliente con sesión, RLS puede ocultar filas.' : null,
+                userJoinError,
+                joinedIdsCount: joinIds.length,
+            }
         })
     } catch (err: any) {
         console.error('metrics error', err)

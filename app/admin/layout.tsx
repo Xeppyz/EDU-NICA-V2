@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 import { getCurrentUser } from "@/lib/supabase/auth-client"
 import {
     SidebarProvider,
@@ -26,6 +26,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const router = useRouter()
     const [loading, setLoading] = useState(true)
     const [user, setUser] = useState<any>(null)
+    const pathname = usePathname()
 
     useEffect(() => {
         async function checkAuth() {
@@ -75,7 +76,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 <SidebarMenuItem>
-                                    <SidebarMenuButton asChild isActive>
+                                    <SidebarMenuButton asChild isActive={pathname === '/admin' || pathname === '/admin/'}>
                                         <a href="/admin">
                                             <Users className="w-4 h-4" />
                                             <span>Resumen</span>
@@ -83,7 +84,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
                                 <SidebarMenuItem>
-                                    <SidebarMenuButton asChild>
+                                    <SidebarMenuButton asChild isActive={pathname?.startsWith('/admin/teachers') ?? false}>
                                         <a href="/admin/teachers">
                                             <UserPlus className="w-4 h-4" />
                                             <span>Docentes</span>
@@ -91,7 +92,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
                                 <SidebarMenuItem>
-                                    <SidebarMenuButton asChild>
+                                    <SidebarMenuButton asChild isActive={pathname?.startsWith('/admin/students') ?? false}>
                                         <a href="/admin/students">
                                             <UserPlus className="w-4 h-4" />
                                             <span>Estudiantes</span>
@@ -99,7 +100,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
                                 <SidebarMenuItem>
-                                    <SidebarMenuButton asChild>
+                                    <SidebarMenuButton asChild isActive={pathname === '/admin/create'}>
                                         <a href="/admin/create">
                                             <UserPlus className="w-4 h-4" />
                                             <span>Crear Usuario</span>

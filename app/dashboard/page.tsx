@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Plus, Edit, Trash2, BookOpen } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase/client"
@@ -16,6 +17,7 @@ interface Class {
   description: string
   subject: string
   created_at: string
+  join_code?: string | null
 }
 
 export default function TeacherDashboard() {
@@ -168,6 +170,18 @@ export default function TeacherDashboard() {
               <CardHeader>
                 <CardTitle className="line-clamp-2">{classItem.name}</CardTitle>
                 <CardDescription>{classItem.subject}</CardDescription>
+                {classItem.join_code ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Badge variant="secondary">Código: {classItem.join_code}</Badge>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigator.clipboard.writeText(classItem.join_code || "")}
+                    >
+                      Copiar
+                    </Button>
+                  </div>
+                ) : null}
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground line-clamp-2">

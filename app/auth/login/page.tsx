@@ -113,16 +113,16 @@ export default function LoginPage() {
           </div>
           {/* Mobile animation under logo */}
           <div className="md:hidden flex justify-center mb-8">
-            <video preload="auto" autoPlay muted loop playsInline className="w-48 h-36 object-cover rounded-lg" aria-hidden="true">
-              <source src="/welcome.mp4" type="video/mp4" />
+            <video preload="auto" autoPlay muted loop playsInline className="w-48 h-36 object-fit rounded-lg" aria-hidden="true">
+              <source src="/welcome2.mp4" type="video/mp4" />
               Your browser does not support the video tag.
             </video>
           </div>
 
           {/* Desktop animation above the inputs (visible on md and up) */}
-          <div className="hidden md:flex justify-center mb-8">
+          <div className="hidden md:flex justify-center mb-5">
             <video preload="auto" autoPlay muted loop playsInline className="w-96 h-56 object-cover rounded-lg shadow-lg" aria-hidden="true">
-              <source src="/welcome.mp4" type="video/mp4" />
+              <source src="/welcome2.mp4" type="video/mp4" />
               Your browser does not support the video tag.
             </video>
           </div>
@@ -132,7 +132,7 @@ export default function LoginPage() {
             <p className="text-gray-600">Ingresa a tu cuenta para continuar</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5 mb-6">
+          <form onSubmit={handleSubmit} className="space-y-1 mb-6">
             <div>
               <label htmlFor="email" className="block text-sm font-semibold text-gray-700 mb-2">
                 Correo Electrónico
@@ -177,14 +177,6 @@ export default function LoginPage() {
               {loading ? "Iniciando..." : "Iniciar Sesión"}
             </Button>
           </form>
-
-
-          <p className="text-sm text-gray-600 text-center mt-6">
-            ¿No tienes cuenta?{" "}
-            <a href="/auth/signup" className="text-purple-600 hover:text-purple-700 font-semibold">
-              Regístrate aquí
-            </a>
-          </p>
         </div>
       </div>
     </div>

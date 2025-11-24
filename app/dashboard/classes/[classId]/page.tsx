@@ -5,7 +5,8 @@ import { useRouter, useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Plus, Edit, Trash2, BookOpen, Users, FileText, TrendingUp } from "lucide-react"
+import { Plus, Edit, Trash2, BookOpen, Users, FileText, TrendingUp, ChevronLeft, ChevronRight } from "lucide-react"
+import { useIsMobile } from "@/hooks/use-mobile"
 import CreateChallengeDialog from "@/components/teacher/create-challenge-dialog"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { getCurrentUser } from "@/lib/supabase/auth-client"
@@ -46,6 +47,20 @@ export default function ClassDetailPage() {
   const [evalDialogOpen, setEvalDialogOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
+  const isMobile = useIsMobile()
+  const carouselPageSize = 3
+  const [tabStartIndex, setTabStartIndex] = useState(0)
+  const allTabs = [
+    { value: "lessons", label: "Lecciones" },
+    { value: "activities", label: "Actividades" },
+    { value: "students", label: `Estudiantes (${students.length})` },
+    { value: "challenges", label: "Desafíos" },
+    { value: "glossary", label: "Glosario" },
+    { value: "evaluations", label: "Evaluaciones" },
+    { value: "analytics", label: "Análisis" },
+  ]
+  const handlePrevTabs = () => setTabStartIndex((prev) => Math.max(0, prev - carouselPageSize))
+  const handleNextTabs = () => setTabStartIndex((prev) => Math.min(allTabs.length - carouselPageSize, prev + carouselPageSize))
 
   // Extraigo la función fuera del useEffect para poder llamarla después (p. ej. desde el dialog)
   // Use useCallback so the function reference is stable and won't change between renders,
@@ -287,15 +302,47 @@ export default function ClassDetailPage() {
       </div>
 
       <Tabs defaultValue="lessons" className="w-full">
-        <TabsList>
-          <TabsTrigger value="lessons">Lecciones</TabsTrigger>
-          <TabsTrigger value="activities">Actividades</TabsTrigger>
-          <TabsTrigger value="students">Estudiantes ({students.length})</TabsTrigger>
-          <TabsTrigger value="challenges">Desafíos</TabsTrigger>
-          <TabsTrigger value="glossary">Glosario</TabsTrigger>
-          <TabsTrigger value="evaluations">Evaluaciones</TabsTrigger>
-          <TabsTrigger value="analytics">Análisis</TabsTrigger>
-        </TabsList>
+        <div className="relative">
+          <TabsList className="flex w-full sm:flex-wrap">
+            {allTabs.map((t, idx) => {
+              const hiddenOnMobile = isMobile && (idx < tabStartIndex || idx >= tabStartIndex + carouselPageSize)
+              return (
+                <TabsTrigger
+                  key={t.value}
+                  value={t.value}
+                  className={hiddenOnMobile ? "hidden sm:inline-flex" : "inline-flex"}
+                >
+                  {t.label}
+                </TabsTrigger>
+              )
+            })}
+          </TabsList>
+          {isMobile && (
+            <div className="flex justify-between items-center mt-2 sm:hidden">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handlePrevTabs}
+                disabled={tabStartIndex === 0}
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <div className="text-xs text-muted-foreground">
+                {Math.floor(tabStartIndex / carouselPageSize) + 1} / {Math.ceil(allTabs.length / carouselPageSize)}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleNextTabs}
+                disabled={tabStartIndex >= allTabs.length - carouselPageSize}
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
+        </div>
 
         <TabsContent value="lessons" className="space-y-4">
           <div className="flex justify-between items-center">

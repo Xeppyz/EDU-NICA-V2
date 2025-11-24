@@ -43,6 +43,16 @@ export default function DashboardLibraryNewPage() {
         })()
     }, [router])
 
+    // Remove diacritics and unsafe chars for Supabase Storage key (S3-like restrictions)
+    const sanitizeFilename = (name: string) => {
+        // Strip directories just in case
+        const base = name.split(/[/\\]/).pop() || name
+        // Remove diacritics
+        const noDiacritics = base.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+        // Replace spaces with dashes, keep only safe chars
+        return noDiacritics.replace(/[^a-zA-Z0-9._-]/g, '_')
+    }
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setError(null)
@@ -66,7 +76,11 @@ export default function DashboardLibraryNewPage() {
 
             if (file) {
                 setUploading(true)
-                const filename = `${Date.now()}-${file.name}`
+                // Preserve the original extension (last segment) but sanitize the base name
+                const ext = file.name.includes('.') ? file.name.split('.').pop() : ''
+                const rawBase = file.name.replace(/\.[^/.]+$/, '')
+                const safeBase = sanitizeFilename(rawBase)
+                const filename = `${Date.now()}-${safeBase}${ext ? '.' + ext : ''}`
                 const path = `materials/${currentUser.id}/${filename}`
                 const uploadResp = await supabase.storage.from('library').upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
                 if (uploadResp?.error) {
@@ -108,6 +122,10 @@ export default function DashboardLibraryNewPage() {
                 <div>
                     <label className="block text-sm font-medium">Archivo (PDF / MP4 / WebM)</label>
                     <input type="file" accept=".pdf,video/*" onChange={handleFile} />
+                    {file && (
+                        <p className="mt-1 text-xs text-muted-foreground">Nombre original: {file.name}</p>
+                    )}
+                    <p className="mt-1 text-xs text-muted-foreground">Se sanitizará el nombre para evitar errores (sin tildes ni caracteres especiales).</p>
                 </div>
                 {error && <div className="text-destructive text-sm">{error}</div>}
                 <div className="flex gap-2">
