@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { Plus, Trash2 } from "lucide-react"
+import { getEvaluationTypeLabel } from "@/lib/evaluations"
 
 interface Question {
   id: string
@@ -28,6 +29,45 @@ interface CreateEvaluationDialogProps {
   onEvaluationCreated: (newEvaluation: any) => void
 }
 
+type FillBlankEntry = {
+  id: string
+  prompt: string
+  answer: string
+  imageStoragePath?: string | null
+  imageUrl?: string
+  file?: File | null
+  previewUrl?: string | null
+}
+
+const createFillBlankEntry = (): FillBlankEntry => ({
+  id: Date.now().toString(),
+  prompt: "",
+  answer: "",
+  imageStoragePath: null,
+  imageUrl: "",
+  file: null,
+  previewUrl: null,
+})
+
+const revokeFillBlankPreview = (entry?: FillBlankEntry | null) => {
+  if (entry?.previewUrl) {
+    try {
+      URL.revokeObjectURL(entry.previewUrl)
+    } catch (_) {
+      // ignore
+    }
+  }
+}
+
+const sanitizeFilename = (name: string) =>
+  name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+
 export function CreateEvaluationDialog({
   classId,
   activityId,
@@ -35,11 +75,13 @@ export function CreateEvaluationDialog({
   onOpenChange,
   onEvaluationCreated,
 }: CreateEvaluationDialogProps) {
+  const evaluationTypeOrder = ["quiz", "fill_blank", "matching", "dragdrop", "coding"]
   const [title, setTitle] = useState("")
   const [questions, setQuestions] = useState<Question[]>([])
   // Type-specific state
   const [matchingPairs, setMatchingPairs] = useState<{ id: string; left: string; right: string }[]>([])
-  const [fillBlanks, setFillBlanks] = useState<{ id: string; prompt: string; answer: string }[]>([])
+  const [fillBlanks, setFillBlanks] = useState<FillBlankEntry[]>([])
+  const fillBlanksRef = useRef(fillBlanks)
   const [dragItems, setDragItems] = useState<{ id: string; label: string }[]>([])
   const [dragTargets, setDragTargets] = useState<{ id: string; label: string }[]>([])
   const [dragMapping, setDragMapping] = useState<Record<string, string>>({})
@@ -55,6 +97,10 @@ export function CreateEvaluationDialog({
   const [dueAt, setDueAt] = useState<string | null>(null)
   const [attemptsAllowed, setAttemptsAllowed] = useState<number>(1)
   const router = useRouter()
+
+  useEffect(() => {
+    fillBlanksRef.current = fillBlanks
+  }, [fillBlanks])
 
   const addQuestion = () => {
     setEditingQuestion({
@@ -74,11 +120,34 @@ export function CreateEvaluationDialog({
   }
 
   const addFillBlank = () => {
-    setFillBlanks([...fillBlanks, { id: Date.now().toString(), prompt: "", answer: "" }])
+    setFillBlanks((prev) => [...prev, createFillBlankEntry()])
   }
 
   const deleteFillBlank = (id: string) => {
-    setFillBlanks(fillBlanks.filter((b) => b.id !== id))
+    setFillBlanks((prev) => {
+      const target = prev.find((b) => b.id === id)
+      revokeFillBlankPreview(target)
+      return prev.filter((b) => b.id !== id)
+    })
+  }
+
+  const handleFillBlankImageChange = (id: string, file: File | null) => {
+    setFillBlanks((prev) =>
+      prev.map((entry) => {
+        if (entry.id !== id) return entry
+        if (entry.previewUrl) revokeFillBlankPreview(entry)
+        if (!file) {
+          return { ...entry, file: null, previewUrl: null, imageStoragePath: null, imageUrl: "" }
+        }
+        return {
+          ...entry,
+          file,
+          previewUrl: URL.createObjectURL(file),
+          imageStoragePath: null,
+          imageUrl: "",
+        }
+      }),
+    )
   }
 
   const addDragItem = () => {
@@ -144,17 +213,22 @@ export function CreateEvaluationDialog({
         return
       }
       if (evaluationType === "matching" && matchingPairs.length === 0) {
-        setError("Agrega al menos un par para el matching")
+        setError("Agrega al menos un par para emparejar")
         setLoading(false)
         return
       }
       if (evaluationType === "fill_blank" && fillBlanks.length === 0) {
-        setError("Agrega al menos una entrada para fill-in-the-blank")
+        setError("Agrega al menos una entrada para completar espacios")
+        setLoading(false)
+        return
+      }
+      if (evaluationType === "fill_blank" && fillBlanks.some((b) => !b.prompt.trim() || !b.answer.trim())) {
+        setError("Completa el prompt y la respuesta esperada en cada entrada")
         setLoading(false)
         return
       }
       if (evaluationType === "dragdrop" && (dragItems.length === 0 || dragTargets.length === 0)) {
-        setError("Agrega al menos un ítem y un objetivo para Drag & Drop")
+        setError("Agrega al menos un ítem y un objetivo para arrastrar y soltar")
         setLoading(false)
         return
       }
@@ -192,7 +266,24 @@ export function CreateEvaluationDialog({
           },
         }
       } else if (evaluationType === "fill_blank") {
-        questionsPayload = fillBlanks.map((b) => ({ id: b.id, prompt: b.prompt, answer: b.answer }))
+        const processed: any[] = []
+        for (const blank of fillBlanks) {
+          let imageStoragePath = blank.imageStoragePath || null
+          if (blank.file) {
+            const extension = blank.file.name.split(".").pop()?.toLowerCase() || "jpg"
+            const rawBase = blank.file.name.substring(0, blank.file.name.lastIndexOf(".")) || blank.file.name
+            const safeBase = sanitizeFilename(rawBase) || sanitizeFilename(blank.prompt) || "segmento"
+            const objectPath = `evaluations/${classId}/fill-blank/${blank.id}-${safeBase}-${Date.now()}.${extension}`
+            const uploadResp = await supabase.storage.from("library").upload(objectPath, blank.file, {
+              upsert: true,
+              contentType: blank.file.type || `image/${extension === "jpg" ? "jpeg" : extension}`,
+            })
+            if (uploadResp.error) throw uploadResp.error
+            imageStoragePath = objectPath
+          }
+          processed.push({ id: blank.id, prompt: blank.prompt, answer: blank.answer, imageStoragePath })
+        }
+        questionsPayload = processed
       } else {
         // other types: keep empty or store custom structure later
         questionsPayload = []
@@ -218,6 +309,7 @@ export function CreateEvaluationDialog({
       setTitle("")
       setQuestions([])
       setMatchingPairs([])
+      fillBlanksRef.current.forEach(revokeFillBlankPreview)
       setFillBlanks([])
       setDragItems([])
       setDragTargets([])
@@ -312,6 +404,12 @@ export function CreateEvaluationDialog({
     }
   }, [open, classId, resolvedActivityId])
 
+  useEffect(() => {
+    return () => {
+      fillBlanksRef.current.forEach(revokeFillBlankPreview)
+    }
+  }, [])
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -382,11 +480,11 @@ export function CreateEvaluationDialog({
               className="w-full px-3 py-2 border rounded bg-background"
               disabled={loading}
             >
-              <option value="quiz">Cuestionario</option>
-              <option value="fill_blank">Fill-in-the-Blank</option>
-              <option value="matching">Matching</option>
-              <option value="dragdrop">Drag & Drop</option>
-              <option value="coding">Coding</option>
+              {evaluationTypeOrder.map((value) => (
+                <option key={value} value={value}>
+                  {getEvaluationTypeLabel(value)}
+                </option>
+              ))}
             </select>
             <p className="text-xs text-muted-foreground mt-1">Se selecciona por defecto según la actividad asociada.</p>
           </div>
@@ -466,7 +564,7 @@ export function CreateEvaluationDialog({
           {evaluationType === "matching" && (
             <div>
               <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-medium">Pares para Matching ({matchingPairs.length})</label>
+                <label className="block text-sm font-medium">Pares para emparejar ({matchingPairs.length})</label>
                 <Button type="button" size="sm" onClick={addMatchingPair} disabled={loading}>
                   <Plus className="w-4 h-4" />
                   Agregar Par
@@ -489,20 +587,36 @@ export function CreateEvaluationDialog({
           {evaluationType === "fill_blank" && (
             <div>
               <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-medium">Entradas para Fill-in-the-Blank ({fillBlanks.length})</label>
+                <label className="block text-sm font-medium">Entradas para completar espacios ({fillBlanks.length})</label>
                 <Button type="button" size="sm" onClick={addFillBlank} disabled={loading}>
                   <Plus className="w-4 h-4" />
                   Agregar Entrada
                 </Button>
               </div>
               {fillBlanks.map((b, idx) => (
-                <div key={b.id} className="p-3 border rounded-lg mb-2">
+                <div key={b.id} className="p-3 border rounded-lg mb-2 space-y-3">
                   <div className="flex gap-2 items-center">
                     <Input value={b.prompt} onChange={(e) => setFillBlanks(fillBlanks.map(f => f.id === b.id ? { ...f, prompt: e.target.value } : f))} placeholder={`Prompt ${idx + 1}`} />
                     <Input value={b.answer} onChange={(e) => setFillBlanks(fillBlanks.map(f => f.id === b.id ? { ...f, answer: e.target.value } : f))} placeholder={`Respuesta esperada ${idx + 1}`} />
                     <Button type="button" variant="ghost" size="icon" onClick={() => deleteFillBlank(b.id)}>
                       <Trash2 className="w-4 h-4 text-destructive" />
                     </Button>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs text-muted-foreground">Imagen de referencia (opcional)</label>
+                    <Input type="file" accept="image/*" onChange={(e) => handleFillBlankImageChange(b.id, e.target.files?.[0] || null)} />
+                    {(b.file || b.previewUrl || b.imageStoragePath) && (
+                      <div className="space-y-2">
+                        <img
+                          src={b.previewUrl || (b.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(b.imageStoragePath)}` : "")}
+                          alt={`Imagen del blank ${idx + 1}`}
+                          className="h-32 w-full rounded-md object-cover"
+                        />
+                        <Button type="button" variant="ghost" size="sm" onClick={() => handleFillBlankImageChange(b.id, null)}>
+                          Quitar imagen
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

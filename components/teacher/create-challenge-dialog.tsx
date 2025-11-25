@@ -1,18 +1,102 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { getSupabaseClient } from "@/lib/supabase/client"
+import { CHALLENGE_TYPE_LABELS } from "@/lib/challenges"
 
 interface Props {
     classId: string
     onChallengeCreated?: (challenge: any) => void
     open?: boolean
     onOpenChange?: (open: boolean) => void
+}
+
+type SelectImageOption = {
+    id: string
+    label: string
+    imageUrl: string
+    imageStoragePath?: string | null
+    file?: File | null
+    previewUrl?: string | null
+}
+
+type FillBlankSectionDraft = {
+    id: string
+    label: string
+    imageUrl?: string
+    imageStoragePath?: string | null
+    file?: File | null
+    previewUrl?: string | null
+}
+
+const createEmptySelectImageOption = (id?: string): SelectImageOption => ({
+    id: id || `img-${Date.now()}`,
+    label: "",
+    imageUrl: "",
+    imageStoragePath: null,
+    file: null,
+    previewUrl: null,
+})
+
+const revokePreview = (option?: SelectImageOption | null) => {
+    if (option?.previewUrl) {
+        try {
+            URL.revokeObjectURL(option.previewUrl)
+        } catch (_) {
+            // ignore revoke errors
+        }
+    }
+}
+
+const createEmptyFillBlankSection = (id?: string): FillBlankSectionDraft => ({
+    id: id || `fb-${Date.now()}`,
+    label: "",
+    imageUrl: "",
+    imageStoragePath: null,
+    file: null,
+    previewUrl: null,
+})
+
+const revokeSectionPreview = (section?: FillBlankSectionDraft | null) => {
+    if (section?.previewUrl) {
+        try {
+            URL.revokeObjectURL(section.previewUrl)
+        } catch (_) {
+            // ignore revoke errors
+        }
+    }
+}
+
+const challengeTypeOrder = [
+    "multiple_choice",
+    "fill_blank",
+    "select_image",
+    "matching",
+    "open_ended",
+    "sign_practice",
+]
+
+const createDefaultRubricCriteria = () => ([
+    { id: "crit-claridad", label: "Claridad", weight: 40, description: "Señales legibles y consistentes." },
+    { id: "crit-expresividad", label: "Expresividad", weight: 30, description: "Uso de expresiones faciales y corporales apropiadas." },
+    { id: "crit-precision", label: "Precisión", weight: 30, description: "Configuración correcta de manos y trayectoria." },
+])
+
+type ValidationResult = {
+    payload: any
+    rubric?: Array<{ id: string; label: string; weight: number; description: string }>
+    maxScore?: number
+    referenceVideoFile?: File | null
+    referenceVideoDurationSeconds?: number | null
+    referenceVideoTranscript?: string | null
+    selectImageOptions?: SelectImageOption[]
+    fillBlankPromptImage?: { file: File | null; imageStoragePath: string | null }
+    fillBlankSections?: FillBlankSectionDraft[]
 }
 
 export default function CreateChallengeDialog({ classId, onChallengeCreated, open, onOpenChange }: Props) {
@@ -28,10 +112,27 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
     const [mcQuestion, setMcQuestion] = useState("")
 
     const [fillPrompt, setFillPrompt] = useState("")
+    const [fillPromptImage, setFillPromptImage] = useState<{ file: File | null; previewUrl: string | null; imageStoragePath: string | null }>({
+        file: null,
+        previewUrl: null,
+        imageStoragePath: null,
+    })
+    const [fillSections, setFillSections] = useState<FillBlankSectionDraft[]>([createEmptyFillBlankSection("fb-1")])
+    const fillSectionsRef = useRef(fillSections)
 
-    const [selectImageOptions, setSelectImageOptions] = useState<Array<{ id: string; label: string; imageUrl: string }>>([
-        { id: "img-1", label: "", imageUrl: "" },
+    const [selectImageOptions, setSelectImageOptions] = useState<SelectImageOption[]>([
+        createEmptySelectImageOption("img-1"),
     ])
+    const selectImageOptionsRef = useRef(selectImageOptions)
+    const fillPromptImageRef = useRef(fillPromptImage)
+
+    const cleanupSelectImagePreviews = () => {
+        selectImageOptionsRef.current.forEach(revokePreview)
+    }
+
+    const cleanupFillSectionPreviews = () => {
+        fillSectionsRef.current.forEach(revokeSectionPreview)
+    }
 
     const [matchingPairs, setMatchingPairs] = useState<Array<{ id: string; left: string; right: string }>>([
         { id: "pair-1", left: "", right: "" },
@@ -46,11 +147,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
     const [signReferenceDuration, setSignReferenceDuration] = useState("")
     const [signReferenceVideoFile, setSignReferenceVideoFile] = useState<File | null>(null)
     const [signMaxScore, setSignMaxScore] = useState("100")
-    const [rubricCriteria, setRubricCriteria] = useState<Array<{ id: string; label: string; weight: number; description: string }>>([
-        { id: "crit-claridad", label: "Claridad", weight: 40, description: "Señales legibles y consistentes." },
-        { id: "crit-expresividad", label: "Expresividad", weight: 30, description: "Uso de expresiones faciales y corporales apropiadas." },
-        { id: "crit-precision", label: "Precisión", weight: 30, description: "Configuración correcta de manos y trayectoria." },
-    ])
+    const [rubricCriteria, setRubricCriteria] = useState<Array<{ id: string; label: string; weight: number; description: string }>>(createDefaultRubricCriteria())
     const [startAt, setStartAt] = useState<string | null>(null)
     const [dueAt, setDueAt] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
@@ -66,14 +163,137 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
             .replace(/^-|-$/g, "")
     }
 
+    useEffect(() => {
+        selectImageOptionsRef.current = selectImageOptions
+    }, [selectImageOptions])
+
+    useEffect(() => {
+        fillSectionsRef.current = fillSections
+    }, [fillSections])
+
+    useEffect(() => {
+        fillPromptImageRef.current = fillPromptImage
+    }, [fillPromptImage])
+
+    useEffect(() => {
+        return () => {
+            cleanupSelectImagePreviews()
+            cleanupFillSectionPreviews()
+            const promptImage = fillPromptImageRef.current
+            if (promptImage?.previewUrl) {
+                try {
+                    URL.revokeObjectURL(promptImage.previewUrl)
+                } catch (_) {
+                    // ignore
+                }
+            }
+        }
+    }, [])
+
+    const handleSelectImageFileChange = (index: number, file: File | null) => {
+        setSelectImageOptions((prev) =>
+            prev.map((opt, i) => {
+                if (i !== index) return opt
+                revokePreview(opt)
+                if (!file) {
+                    return { ...opt, file: null, previewUrl: null }
+                }
+                const previewUrl = URL.createObjectURL(file)
+                return {
+                    ...opt,
+                    file,
+                    previewUrl,
+                    imageUrl: "",
+                    imageStoragePath: null,
+                }
+            }),
+        )
+    }
+
+    const removeSelectImageOption = (index: number) => {
+        setSelectImageOptions((prev) => {
+            if (index < 0 || index >= prev.length) return prev
+            const target = prev[index]
+            revokePreview(target)
+            return prev.filter((_, i) => i !== index)
+        })
+    }
+
+    const addSelectImageOption = () => {
+        setSelectImageOptions((prev) => [...prev, createEmptySelectImageOption()])
+    }
+
+    const handleFillPromptImageChange = (file: File | null) => {
+        setFillPromptImage((prev) => {
+            if (prev.previewUrl) {
+                try {
+                    URL.revokeObjectURL(prev.previewUrl)
+                } catch (_) {
+                    // ignore
+                }
+            }
+            if (!file) {
+                return { file: null, previewUrl: null, imageStoragePath: null }
+            }
+            return { file, previewUrl: URL.createObjectURL(file), imageStoragePath: null }
+        })
+    }
+
+    const addFillSection = () => {
+        setFillSections((prev) => [...prev, createEmptyFillBlankSection()])
+    }
+
+    const updateFillSectionLabel = (sectionId: string, value: string) => {
+        setFillSections((prev) => prev.map((section) => (section.id === sectionId ? { ...section, label: value } : section)))
+    }
+
+    const handleFillSectionFileChange = (sectionId: string, file: File | null) => {
+        setFillSections((prev) =>
+            prev.map((section) => {
+                if (section.id !== sectionId) return section
+                if (section.previewUrl) {
+                    revokeSectionPreview(section)
+                }
+                if (!file) {
+                    return { ...section, file: null, previewUrl: null, imageStoragePath: null, imageUrl: "" }
+                }
+                return {
+                    ...section,
+                    file,
+                    previewUrl: URL.createObjectURL(file),
+                    imageStoragePath: null,
+                    imageUrl: "",
+                }
+            }),
+        )
+    }
+
+    const removeFillSection = (sectionId: string) => {
+        setFillSections((prev) => {
+            const target = prev.find((section) => section.id === sectionId)
+            revokeSectionPreview(target)
+            return prev.filter((section) => section.id !== sectionId)
+        })
+    }
+
     const totalRubricWeight = useMemo(() => rubricCriteria.reduce((acc, crit) => acc + (Number(crit.weight) || 0), 0), [rubricCriteria])
 
     const previewPayload = () => {
         if (type === "multiple_choice") {
             return { prompt: mcQuestion, options: mcOptions.map((o) => ({ id: o.id, text: o.text })), correct_index: mcCorrectIndex }
         }
-        if (type === "fill_blank") return { prompt: fillPrompt }
-        if (type === "select_image") return { options: selectImageOptions.map((o) => ({ id: o.id, label: o.label, imageUrl: o.imageUrl })) }
+        if (type === "fill_blank") {
+            return {
+                prompt: fillPrompt,
+                promptImageStoragePath: fillPromptImage.imageStoragePath,
+                sections: fillSections.map((section) => ({
+                    id: section.id,
+                    label: section.label,
+                    imageStoragePath: section.imageStoragePath,
+                })),
+            }
+        }
+        if (type === "select_image") return { options: selectImageOptions.map((o) => ({ id: o.id, label: o.label, imageUrl: o.imageUrl, imageStoragePath: o.imageStoragePath })) }
         if (type === "matching") return { pairs: matchingPairs.map((p) => ({ id: p.id, left: p.left, right: p.right })) }
         if (type === "open_ended") return { prompt: openPrompt }
         if (type === "sign_practice") {
@@ -87,32 +307,73 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
         return {}
     }
 
-    const validateAndBuildPayload = () => {
+    const validateAndBuildPayload = (): ValidationResult => {
         // returns payload or throws Error with user-friendly message
         if (!title.trim()) throw new Error("El título es obligatorio")
 
         if (type === "multiple_choice") {
-            if (mcOptions.length < 2) throw new Error("Agrega al menos 2 opciones para Multiple Choice")
+            if (mcOptions.length < 2) throw new Error("Agrega al menos 2 opciones para selección múltiple")
             if (mcOptions.some((o) => !o.text || !o.text.trim())) throw new Error("Todas las opciones deben tener texto")
             if (mcCorrectIndex < 0 || mcCorrectIndex >= mcOptions.length) throw new Error("Selecciona la opción correcta")
-            if (!mcQuestion.trim()) throw new Error("Escribe la pregunta para el Multiple Choice")
+            if (!mcQuestion.trim()) throw new Error("Escribe la pregunta para la selección múltiple")
             return { payload: { prompt: mcQuestion.trim(), options: mcOptions.map((o) => ({ id: o.id, text: o.text })), correct_index: mcCorrectIndex } }
         }
 
         if (type === "fill_blank") {
-            if (!fillPrompt || !fillPrompt.trim()) throw new Error("El enunciado del Fill Blank no puede estar vacío")
-            // optional: enforce placeholder
-            return { payload: { prompt: fillPrompt } }
+            const promptValue = fillPrompt.trim()
+            const normalizedSections = fillSections
+                .map((section) => ({
+                    ...section,
+                    label: section.label.trim(),
+                }))
+                .filter((section) => section.label || section.file || section.imageStoragePath || section.imageUrl)
+
+            const hasPromptMedia = !!fillPromptImage.file || !!fillPromptImage.imageStoragePath
+            if (!promptValue && normalizedSections.length === 0 && !hasPromptMedia) {
+                throw new Error("Agrega un enunciado o al menos una imagen para contextualizar el ejercicio")
+            }
+
+            const invalidSection = normalizedSections.find((section) => {
+                const hasImage = !!section.file || !!section.imageStoragePath || !!section.imageUrl
+                return !hasImage
+            })
+            if (invalidSection) {
+                throw new Error("Cada segmento visual debe incluir una imagen")
+            }
+
+            return {
+                payload: { prompt: promptValue },
+                fillBlankPromptImage: { file: fillPromptImage.file, imageStoragePath: fillPromptImage.imageStoragePath },
+                fillBlankSections: normalizedSections,
+            }
         }
 
         if (type === "select_image") {
             if (selectImageOptions.length < 2) throw new Error("Agrega al menos 2 opciones con imagen")
-            if (selectImageOptions.some((o) => !o.label.trim() || !o.imageUrl.trim())) throw new Error("Cada opción debe tener etiqueta y URL de imagen")
-            return { payload: { options: selectImageOptions.map((o) => ({ id: o.id, label: o.label, imageUrl: o.imageUrl })) } }
+            const normalized = selectImageOptions.map((opt) => ({
+                ...opt,
+                label: opt.label.trim(),
+                imageUrl: (opt.imageUrl || "").trim(),
+            }))
+            normalized.forEach((opt) => {
+                if (!opt.label) throw new Error("Cada opción debe tener una etiqueta")
+                const hasRemoteUrl = !!opt.imageUrl
+                const hasFile = !!opt.file
+                const hasStoredPath = !!opt.imageStoragePath
+                if (!hasRemoteUrl && !hasFile && !hasStoredPath) {
+                    throw new Error("Cada opción debe tener una imagen (archivo o URL)")
+                }
+            })
+            return {
+                payload: {
+                    options: normalized.map((o) => ({ id: o.id, label: o.label, imageUrl: o.imageUrl, imageStoragePath: o.imageStoragePath ?? null })),
+                },
+                selectImageOptions: normalized,
+            }
         }
 
         if (type === "matching") {
-            if (matchingPairs.length < 1) throw new Error("Agrega al menos un par para Matching")
+            if (matchingPairs.length < 1) throw new Error("Agrega al menos un par para emparejar columnas")
             if (matchingPairs.some((p) => !p.left.trim() || !p.right.trim())) throw new Error("Todos los pares deben tener ambos lados rellenos")
             return { payload: { pairs: matchingPairs.map((p) => ({ id: p.id, left: p.left, right: p.right })) } }
         }
@@ -159,6 +420,47 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
         return { payload: {} }
     }
 
+    const resetForm = () => {
+        setTitle("")
+        setDescription("")
+        setType("multiple_choice")
+        setPayload(null)
+        setMcQuestion("")
+        setMcOptions([{ id: "opt-1", text: "" }])
+        setMcCorrectIndex(0)
+        setFillPrompt("")
+        const promptImage = fillPromptImageRef.current
+        if (promptImage?.previewUrl) {
+            try {
+                URL.revokeObjectURL(promptImage.previewUrl)
+            } catch (_) {
+                // ignore
+            }
+        }
+        setFillPromptImage({ file: null, previewUrl: null, imageStoragePath: null })
+        cleanupFillSectionPreviews()
+        setFillSections([createEmptyFillBlankSection("fb-1")])
+        cleanupSelectImagePreviews()
+        setSelectImageOptions([createEmptySelectImageOption("img-1")])
+        setMatchingPairs([{ id: "pair-1", left: "", right: "" }])
+        setOpenPrompt("")
+        setSignPrompt("")
+        setSignTips("")
+        setSignReferenceTranscript("")
+        setSignReferenceDuration("")
+        setSignReferenceVideoFile(null)
+        setSignMaxScore("100")
+        setRubricCriteria(createDefaultRubricCriteria())
+        setStartAt(null)
+        setDueAt(null)
+        setError(null)
+    }
+
+    const handleDialogOpenChange = (nextOpen: boolean) => {
+        if (!nextOpen) resetForm()
+        onOpenChange && onOpenChange(nextOpen)
+    }
+
     const handleCreate = async () => {
         setLoading(true)
         setError(null)
@@ -184,9 +486,79 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                 })
                 if (uploadResp.error) throw uploadResp.error
                 referenceVideoStoragePath = objectPath
+                // do not mutate payloadJson with storage path (payload has a strict type); storage path is stored separately in the DB row
+            }
+
+            if (type === "select_image" && built.selectImageOptions) {
+                const uploadedOptions: Array<{ id: string; label: string; imageUrl: string; imageStoragePath: string | null }> = []
+                for (const option of built.selectImageOptions) {
+                    let imageUrl = option.imageUrl || ""
+                    let imageStoragePath = option.imageStoragePath ?? null
+                    if (option.file) {
+                        const file = option.file
+                        const extension = file.name.split(".").pop()?.toLowerCase() || "jpg"
+                        const rawBase = file.name.substring(0, file.name.lastIndexOf(".")) || file.name
+                        const safeBase = sanitizeFilename(rawBase) || "imagen"
+                        const objectPath = `challenges/${classId}/select-image/${option.id}-${safeBase}-${Date.now()}.${extension}`
+                        const uploadResp = await supabase.storage.from("library").upload(objectPath, file, {
+                            upsert: true,
+                            contentType: file.type || `image/${extension === "jpg" ? "jpeg" : extension}`,
+                        })
+                        if (uploadResp.error) throw uploadResp.error
+                        imageStoragePath = objectPath
+                        // si existía una URL remota se respeta, de lo contrario se resolverá con el path
+                        if (!/^https?:\/\//i.test(imageUrl)) {
+                            imageUrl = ""
+                        }
+                    }
+                    uploadedOptions.push({ id: option.id, label: option.label, imageUrl, imageStoragePath })
+                }
+                payloadJson = { options: uploadedOptions }
+            }
+
+            if (type === "fill_blank") {
+                let promptImageStoragePath = built.fillBlankPromptImage?.imageStoragePath ?? null
+                if (built.fillBlankPromptImage?.file) {
+                    const file = built.fillBlankPromptImage.file
+                    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg"
+                    const rawBase = file.name.substring(0, file.name.lastIndexOf(".")) || file.name
+                    const safeBase = sanitizeFilename(rawBase) || "prompt"
+                    const objectPath = `challenges/${classId}/fill-blank/prompt-${safeBase}-${Date.now()}.${extension}`
+                    const uploadResp = await supabase.storage.from("library").upload(objectPath, file, {
+                        upsert: true,
+                        contentType: file.type || `image/${extension === "jpg" ? "jpeg" : extension}`,
+                    })
+                    if (uploadResp.error) throw uploadResp.error
+                    promptImageStoragePath = objectPath
+                }
+
+                const processedSections: Array<{ id: string; label: string; imageUrl?: string; imageStoragePath: string | null }> = []
+                for (const section of built.fillBlankSections || []) {
+                    let imageStoragePath = section.imageStoragePath ?? null
+                    let imageUrl = section.imageUrl || ""
+                    if (section.file) {
+                        const file = section.file
+                        const extension = file.name.split(".").pop()?.toLowerCase() || "jpg"
+                        const rawBase = file.name.substring(0, file.name.lastIndexOf(".")) || file.name
+                        const safeBase = sanitizeFilename(rawBase) || section.id
+                        const objectPath = `challenges/${classId}/fill-blank/${section.id}-${safeBase}-${Date.now()}.${extension}`
+                        const uploadResp = await supabase.storage.from("library").upload(objectPath, file, {
+                            upsert: true,
+                            contentType: file.type || `image/${extension === "jpg" ? "jpeg" : extension}`,
+                        })
+                        if (uploadResp.error) throw uploadResp.error
+                        imageStoragePath = objectPath
+                        if (!/^https?:\/\//i.test(imageUrl)) {
+                            imageUrl = ""
+                        }
+                    }
+                    processedSections.push({ id: section.id, label: section.label, imageUrl, imageStoragePath })
+                }
+
                 payloadJson = {
                     ...payloadJson,
-                    reference_video_storage_path: objectPath,
+                    promptImageStoragePath,
+                    sections: processedSections,
                 }
             }
 
@@ -209,31 +581,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
             const resp = await supabase.from("challenges").insert([toInsert]).select().single()
             if (resp.error) throw resp.error
             onChallengeCreated && onChallengeCreated(resp.data)
-            // reset form
-            setTitle("")
-            setDescription("")
-            setType("multiple_choice")
-            setPayload(null)
-            setMcOptions([{ id: "opt-1", text: "" }])
-            setMcCorrectIndex(0)
-            setFillPrompt("")
-            setSelectImageOptions([{ id: "img-1", label: "", imageUrl: "" }])
-            setMatchingPairs([{ id: "pair-1", left: "", right: "" }])
-            setOpenPrompt("")
-            setSignPrompt("")
-            setSignTips("")
-            setSignReferenceTranscript("")
-            setSignReferenceDuration("")
-            setSignReferenceVideoFile(null)
-            setSignMaxScore("100")
-            setRubricCriteria([
-                { id: "crit-claridad", label: "Claridad", weight: 40, description: "Señales legibles y consistentes." },
-                { id: "crit-expresividad", label: "Expresividad", weight: 30, description: "Uso de expresiones faciales y corporales apropiadas." },
-                { id: "crit-precision", label: "Precisión", weight: 30, description: "Configuración correcta de manos y trayectoria." },
-            ])
-            setStartAt(null)
-            setDueAt(null)
-            onOpenChange && onOpenChange(false)
+            handleDialogOpenChange(false)
         } catch (err) {
             console.error("Error creating challenge:", err)
             const msg = (err as any)?.message || "Error creando el desafío"
@@ -244,7 +592,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
     }
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <Dialog open={open} onOpenChange={handleDialogOpenChange}>
             <DialogTrigger asChild>
                 <Button>
                     Crear Desafío
@@ -268,12 +616,11 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                             <SelectValue placeholder="Selecciona un tipo" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
-                            <SelectItem value="fill_blank">Fill Blank</SelectItem>
-                            <SelectItem value="select_image">Select Image</SelectItem>
-                            <SelectItem value="matching">Matching</SelectItem>
-                            <SelectItem value="open_ended">Open Ended</SelectItem>
-                            <SelectItem value="sign_practice">Práctica de señas (video)</SelectItem>
+                            {challengeTypeOrder.map((value) => (
+                                <SelectItem key={value} value={value}>
+                                    {value === "sign_practice" ? `${CHALLENGE_TYPE_LABELS[value]} (video)` : CHALLENGE_TYPE_LABELS[value]}
+                                </SelectItem>
+                            ))}
                         </SelectContent>
                     </Select>
 
@@ -301,23 +648,155 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                     )}
 
                     {type === "fill_blank" && (
-                        <div>
-                            <label className="text-sm">Enunciado (usa ___ para indicar el hueco)</label>
-                            <Textarea value={fillPrompt} onChange={(e) => setFillPrompt(e.target.value)} />
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm">Enunciado principal</label>
+                                <Textarea value={fillPrompt} onChange={(e) => setFillPrompt(e.target.value)} placeholder="Describe la oración o el contexto" />
+                                <p className="text-xs text-muted-foreground mt-1">Agrega una instrucción breve y usa las imágenes para representar cada segmento en LSN.</p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="text-sm">Imagen del enunciado (opcional)</label>
+                                <Input type="file" accept="image/*" onChange={(e) => handleFillPromptImageChange(e.target.files?.[0] || null)} />
+                                {(fillPromptImage.previewUrl || fillPromptImage.imageStoragePath) && (
+                                    <div className="space-y-2">
+                                        <img
+                                            src={fillPromptImage.previewUrl || (fillPromptImage.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(fillPromptImage.imageStoragePath)}` : "")}
+                                            alt="Imagen del enunciado"
+                                            className="h-32 w-full rounded-md object-cover"
+                                        />
+                                        <Button type="button" variant="ghost" size="sm" onClick={() => handleFillPromptImageChange(null)}>
+                                            Quitar imagen
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm font-medium">Segmentos con imagen</p>
+                                        <p className="text-xs text-muted-foreground">Sube imágenes en orden para que el estudiante escriba cada parte de la oración.</p>
+                                    </div>
+                                    <Button type="button" variant="outline" onClick={addFillSection}>
+                                        Añadir imagen
+                                    </Button>
+                                </div>
+
+                                {fillSections.length === 0 && (
+                                    <p className="text-xs text-muted-foreground border rounded-md p-3">Agrega al menos una imagen si deseas que el estudiante forme la oración a partir de señas.</p>
+                                )}
+
+                                <div className="space-y-3">
+                                    {fillSections.map((section, idx) => {
+                                        const storedPreview = section.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(section.imageStoragePath)}` : null
+                                        const previewSrc = section.previewUrl || storedPreview
+                                        return (
+                                            <div key={section.id} className="rounded-md border p-3 space-y-3">
+                                                <div className="flex flex-col gap-2 md:flex-row">
+                                                    <Input
+                                                        placeholder={`Descripción de la imagen ${idx + 1}`}
+                                                        value={section.label}
+                                                        onChange={(e) => updateFillSectionLabel(section.id, e.target.value)}
+                                                    />
+                                                    <Button type="button" variant="ghost" onClick={() => removeFillSection(section.id)} disabled={fillSections.length <= 1}>
+                                                        Eliminar
+                                                    </Button>
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-muted-foreground">Archivo de imagen</label>
+                                                    <Input type="file" accept="image/*" onChange={(e) => handleFillSectionFileChange(section.id, e.target.files?.[0] || null)} />
+                                                    {section.file && (
+                                                        <p className="text-xs text-muted-foreground mt-1">Seleccionado: {section.file.name}</p>
+                                                    )}
+                                                </div>
+                                                {previewSrc ? (
+                                                    <div className="space-y-2">
+                                                        <img src={previewSrc} alt={section.label || `Imagen ${idx + 1}`} className="h-40 w-full rounded-md object-cover" />
+                                                        <Button type="button" variant="ghost" size="sm" onClick={() => handleFillSectionFileChange(section.id, null)}>
+                                                            Quitar imagen
+                                                        </Button>
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-muted-foreground">Adjunta un archivo para este segmento.</p>
+                                                )}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
                         </div>
                     )}
 
                     {type === "select_image" && (
-                        <div className="space-y-2">
+                        <div className="space-y-3">
                             <p className="text-sm">Opciones con imagen</p>
-                            {selectImageOptions.map((opt, idx) => (
-                                <div key={opt.id} className="grid grid-cols-3 gap-2 items-center">
-                                    <Input placeholder="Etiqueta" value={opt.label} onChange={(e) => setSelectImageOptions((prev) => prev.map((p, i) => (i === idx ? { ...p, label: e.target.value } : p)))} />
-                                    <Input placeholder="URL de imagen" value={opt.imageUrl} onChange={(e) => setSelectImageOptions((prev) => prev.map((p, i) => (i === idx ? { ...p, imageUrl: e.target.value } : p)))} />
-                                    <Button variant="ghost" onClick={() => setSelectImageOptions((prev) => prev.filter((_, i) => i !== idx))}>Eliminar</Button>
-                                </div>
-                            ))}
-                            <Button onClick={() => setSelectImageOptions((prev) => [...prev, { id: `img-${Date.now()}`, label: "", imageUrl: "" }])}>Añadir opción</Button>
+                            {selectImageOptions.map((opt, idx) => {
+                                const previewSrc = opt.previewUrl || (opt.imageUrl ? opt.imageUrl : null)
+                                return (
+                                    <div key={opt.id} className="space-y-2 rounded-md border p-3">
+                                        <div className="flex flex-col gap-2 md:flex-row">
+                                            <Input
+                                                placeholder="Etiqueta"
+                                                value={opt.label}
+                                                onChange={(e) =>
+                                                    setSelectImageOptions((prev) => prev.map((p, i) => (i === idx ? { ...p, label: e.target.value } : p)))
+                                                }
+                                            />
+                                            <Button type="button" variant="ghost" onClick={() => removeSelectImageOption(idx)}>
+                                                Eliminar
+                                            </Button>
+                                        </div>
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            <div className="space-y-1">
+                                                <label className="text-xs text-muted-foreground">URL directa (opcional)</label>
+                                                <Input
+                                                    placeholder="https://"
+                                                    value={opt.imageUrl}
+                                                    onChange={(e) =>
+                                                        setSelectImageOptions((prev) =>
+                                                            prev.map((p, i) => (i === idx ? { ...p, imageUrl: e.target.value } : p)),
+                                                        )
+                                                    }
+                                                    disabled={!!opt.file}
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <label className="text-xs text-muted-foreground">Sube un archivo (recomendado)</label>
+                                                <Input
+                                                    key={`${opt.id}-${opt.previewUrl || "remote"}`}
+                                                    type="file"
+                                                    accept="image/*"
+                                                    onChange={(e) => handleSelectImageFileChange(idx, e.target.files?.[0] || null)}
+                                                />
+                                                {opt.file ? (
+                                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                        <span>{opt.file.name}</span>
+                                                        <Button type="button" variant="ghost" size="sm" onClick={() => handleSelectImageFileChange(idx, null)}>
+                                                            Quitar archivo
+                                                        </Button>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            {previewSrc ? (
+                                                <img src={previewSrc} alt={opt.label || "Previsualización"} className="h-24 w-24 rounded-md object-cover" />
+                                            ) : (
+                                                <div className="flex h-24 w-24 items-center justify-center rounded-md border text-xs text-muted-foreground">
+                                                    Sin vista previa
+                                                </div>
+                                            )}
+                                            {opt.imageStoragePath && !previewSrc && (
+                                                <span className="text-xs text-muted-foreground">La imagen se mostrará después de guardar.</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                            <Button type="button" variant="outline" onClick={addSelectImageOption}>
+                                Añadir opción
+                            </Button>
                         </div>
                     )}
 
@@ -453,21 +932,57 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                             )}
 
                             {type === "fill_blank" && (
-                                <div>
+                                <div className="space-y-3">
                                     <p className="font-medium">{fillPrompt || "(Enunciado vacío)"}</p>
+                                    {(fillPromptImage.previewUrl || fillPromptImage.imageStoragePath) && (
+                                        <img
+                                            src={fillPromptImage.previewUrl || (fillPromptImage.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(fillPromptImage.imageStoragePath)}` : "")}
+                                            alt="Imagen del enunciado"
+                                            className="h-32 w-full rounded-md object-cover"
+                                        />
+                                    )}
+                                    {fillSections.length > 0 && (
+                                        <div className="space-y-2">
+                                            {fillSections.map((section, idx) => {
+                                                const storedPreview = section.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(section.imageStoragePath)}` : null
+                                                const previewSrc = section.previewUrl || storedPreview
+                                                return (
+                                                    <div key={section.id} className="rounded border p-2">
+                                                        <p className="text-sm font-medium">Imagen {idx + 1}: {section.label || "(sin descripción)"}</p>
+                                                        {previewSrc ? (
+                                                            <img src={previewSrc} alt={section.label || `Imagen ${idx + 1}`} className="mt-2 h-32 w-full rounded-md object-cover" />
+                                                        ) : (
+                                                            <p className="text-xs text-muted-foreground">Adjunta un archivo para mostrar aquí.</p>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
                             {type === "select_image" && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    {selectImageOptions.map((opt) => (
-                                        <div key={opt.id} className="flex items-center gap-2 border p-2 rounded">
-                                            {opt.imageUrl ? <img src={opt.imageUrl} alt={opt.label} className="w-20 h-20 object-cover" /> : <div className="w-20 h-20 bg-muted" />}
-                                            <div>
-                                                <div className="font-medium">{opt.label || "(etiqueta)"}</div>
+                                    {selectImageOptions.map((opt) => {
+                                        const previewSrc = opt.previewUrl || (opt.imageUrl ? opt.imageUrl : null)
+                                        return (
+                                            <div key={opt.id} className="flex items-center gap-2 rounded border p-2">
+                                                {previewSrc ? (
+                                                    <img src={previewSrc} alt={opt.label} className="h-20 w-20 rounded object-cover" />
+                                                ) : (
+                                                    <div className="flex h-20 w-20 items-center justify-center rounded bg-muted text-xs text-muted-foreground">Sin imagen</div>
+                                                )}
+                                                <div>
+                                                    <div className="font-medium">{opt.label || "(etiqueta)"}</div>
+                                                    {opt.imageUrl && !opt.previewUrl && (
+                                                        <p className="text-xs text-muted-foreground truncate max-w-[12rem]">{opt.imageUrl}</p>
+                                                    )}
+                                                    {opt.previewUrl && <p className="text-xs text-muted-foreground">Archivo local listo para subir</p>}
+                                                </div>
                                             </div>
-                                        </div>
-                                    ))}
+                                        )
+                                    })}
                                 </div>
                             )}
 
@@ -519,7 +1034,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
 
                 <DialogFooter>
                     {error && <div className="text-sm text-destructive mr-auto">{error}</div>}
-                    <Button variant="ghost" onClick={() => onOpenChange && onOpenChange(false)} disabled={loading}>
+                    <Button variant="ghost" onClick={() => handleDialogOpenChange(false)} disabled={loading}>
                         Cancelar
                     </Button>
                     <Button onClick={handleCreate} disabled={loading}>

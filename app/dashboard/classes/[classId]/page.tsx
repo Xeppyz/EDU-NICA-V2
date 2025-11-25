@@ -14,11 +14,13 @@ import { CreateLessonDialog } from "@/components/teacher/create-leasson-dialog"
 import { CreateEvaluationDialog } from "@/components/teacher/create-evaluation-dialog"
 import CreateActivityDialog from "@/components/teacher/create-activity-dialog"
 import EditLessonDialog from "@/components/teacher/edit-lesson-dialog"
+import { getChallengeTypeLabel } from "@/lib/challenges"
 
 interface Lesson {
   id: string
+  class_id: string
   title: string
-  description: string
+  description: string | null
   video_url: string | null
   pdf_url: string | null
   order_index: number
@@ -297,8 +299,17 @@ export default function ClassDetailPage() {
         <Button variant="outline" onClick={() => router.push("/dashboard")} className="mb-4">
           ← Volver
         </Button>
-        <h1 className="text-3xl font-bold">{classDetail.name}</h1>
-        <p className="text-muted-foreground mt-1">{classDetail.description}</p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">{classDetail.name}</h1>
+            <p className="text-muted-foreground mt-1">{classDetail.description}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => router.push(`/dashboard/classes/${classId}/forum`)}>
+              Foro de la clase
+            </Button>
+          </div>
+        </div>
       </div>
 
       <Tabs defaultValue="lessons" className="w-full">
@@ -370,6 +381,7 @@ export default function ClassDetailPage() {
                     <div className="flex gap-2">
                       <EditLessonDialog
                         lesson={lesson}
+                        classId={classId}
                         onLessonUpdated={(updated) => setLessons((prev) => prev.map((l) => (l.id === updated.id ? updated : l)))}
                       >
                         <Button variant="ghost" size="icon">
@@ -579,7 +591,7 @@ export default function ClassDetailPage() {
                     <div className="flex-1">
                       <h3 className="font-medium">{ch.title}</h3>
                       <p className="text-sm text-muted-foreground">{ch.description}</p>
-                      <p className="text-xs text-muted-foreground">Tipo: {ch.type}</p>
+                      <p className="text-xs text-muted-foreground">Tipo: {getChallengeTypeLabel(ch.type)}</p>
                       {ch.due_at && <p className="text-xs text-muted-foreground">Vence: {new Date(ch.due_at).toLocaleString()}</p>}
                     </div>
                     <div className="flex gap-2">

@@ -31,6 +31,37 @@ export function CreateLessonDialog({ classId, onLessonCreated }: CreateLessonDia
         videoUrl: "",
         pdfUrl: "",
     })
+    const [videoFile, setVideoFile] = useState<File | null>(null)
+    const [videoInputKey, setVideoInputKey] = useState(0)
+
+    const sanitizeFilename = (name: string) =>
+        name
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9-_]+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-|-$/g, "")
+
+    const getVideoMimeType = (ext: string) => {
+        switch (ext) {
+            case "webm":
+                return "video/webm"
+            case "mov":
+                return "video/quicktime"
+            case "m4v":
+                return "video/x-m4v"
+            case "mkv":
+                return "video/x-matroska"
+            case "avi":
+                return "video/x-msvideo"
+            case "ogg":
+            case "ogv":
+                return "video/ogg"
+            default:
+                return "video/mp4"
+        }
+    }
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target
@@ -40,12 +71,37 @@ export function CreateLessonDialog({ classId, onLessonCreated }: CreateLessonDia
         }))
     }
 
+    const handleVideoFileChange = (file: File | null) => {
+        setVideoFile(file)
+        if (file) {
+            setFormData((prev) => ({ ...prev, videoUrl: "" }))
+        } else {
+            setVideoInputKey((key) => key + 1)
+        }
+    }
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         setLoading(true)
 
         try {
             const supabase = getSupabaseClient()
+
+            let resolvedVideoUrl = formData.videoUrl.trim() || null
+
+            if (videoFile) {
+                const extension = videoFile.name.split(".").pop()?.toLowerCase() || "mp4"
+                const baseName = videoFile.name.substring(0, videoFile.name.lastIndexOf(".")) || videoFile.name
+                const safeBase = sanitizeFilename(baseName) || "video"
+                const objectPath = `lessons/${classId}/${Date.now()}-${safeBase}.${extension}`
+                const contentType = videoFile.type || getVideoMimeType(extension)
+                const uploadResp = await supabase.storage.from("library").upload(objectPath, videoFile, {
+                    upsert: true,
+                    contentType,
+                })
+                if (uploadResp.error) throw uploadResp.error
+                resolvedVideoUrl = `/api/library/object?path=${encodeURIComponent(objectPath)}`
+            }
 
             // Get the highest order index
             const { data: lastLesson } = await supabase
@@ -62,8 +118,8 @@ export function CreateLessonDialog({ classId, onLessonCreated }: CreateLessonDia
                     class_id: classId,
                     title: formData.title,
                     description: formData.description,
-                    video_url: formData.videoUrl || null,
-                    pdf_url: formData.pdfUrl || null,
+                    video_url: resolvedVideoUrl,
+                    pdf_url: formData.pdfUrl.trim() || null,
                     order_index: nextOrder,
                 },
             ])
@@ -80,6 +136,8 @@ export function CreateLessonDialog({ classId, onLessonCreated }: CreateLessonDia
                 videoUrl: "",
                 pdfUrl: "",
             })
+            setVideoFile(null)
+            setVideoInputKey((key) => key + 1)
             setOpen(false)
             onLessonCreated()
         } catch (error) {
@@ -136,8 +194,30 @@ export function CreateLessonDialog({ classId, onLessonCreated }: CreateLessonDia
                             onChange={handleInputChange}
                             placeholder="https://ejemplo.com/video.mp4"
                             type="url"
+                            disabled={!!videoFile}
                         />
-                        <p className="text-xs text-muted-foreground mt-1">Puedes agregar un video regular o de LSN</p>
+                        <p className="text-xs text-muted-foreground mt-1">Pega un enlace de YouTube/Vimeo o carga un archivo local.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Subir video desde tu equipo</label>
+                        <Input
+                            key={videoInputKey}
+                            type="file"
+                            accept="video/*"
+                            onChange={(e) => handleVideoFileChange(e.target.files?.[0] || null)}
+                            disabled={loading || !!formData.videoUrl}
+                        />
+                        {videoFile ? (
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span className="truncate">{videoFile.name}</span>
+                                <Button type="button" variant="ghost" size="sm" onClick={() => handleVideoFileChange(null)}>
+                                    Quitar archivo
+                                </Button>
+                            </div>
+                        ) : (
+                            <p className="text-xs text-muted-foreground">Formatos recomendados: MP4, MOV o WEBM (máx. 200 MB).</p>
+                        )}
                     </div>
 
                     <div>

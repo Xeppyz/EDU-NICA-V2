@@ -23,6 +23,7 @@ export default function StudentChallengePage() {
     // type-specific state
     const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
     const [fillText, setFillText] = useState("")
+    const [fillSectionAnswers, setFillSectionAnswers] = useState<Record<string, string>>({})
     const [openText, setOpenText] = useState("")
     const [matchingMap, setMatchingMap] = useState<Record<string, string>>({})
     const [existingResponse, setExistingResponse] = useState<any | null>(null)
@@ -39,6 +40,22 @@ export default function StudentChallengePage() {
     const liveVideoRef = useRef<HTMLVideoElement | null>(null)
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const [cameraStream, setCameraStream] = useState<MediaStream | null>(null)
+    const [selectImageSignedUrls, setSelectImageSignedUrls] = useState<Record<string, string>>({})
+
+    const getOptionStoragePath = (option: any) => option?.imageStoragePath ?? option?.image_storage_path ?? null
+    const buildStorageProxyUrl = (path?: string | null) => (path ? `/api/library/object?path=${encodeURIComponent(path)}` : null)
+    const getFillImageSrc = (entry?: any) => {
+        if (!entry) return null
+        if (typeof entry.imageUrl === "string" && /^https?:\/\//i.test(entry.imageUrl)) return entry.imageUrl
+        const storagePath = entry.imageStoragePath ?? entry.image_storage_path ?? null
+        return buildStorageProxyUrl(storagePath)
+    }
+    const getFillPromptImageSrc = (payload?: any) => {
+        if (!payload) return null
+        if (typeof payload.promptImageUrl === "string" && /^https?:\/\//i.test(payload.promptImageUrl)) return payload.promptImageUrl
+        const storagePath = payload.promptImageStoragePath ?? payload.prompt_image_storage_path ?? null
+        return buildStorageProxyUrl(storagePath)
+    }
 
     useEffect(() => {
         let mounted = true
@@ -64,18 +81,65 @@ export default function StudentChallengePage() {
                     return
                 }
 
+                const hydrateSelectImageOptions = async (challengeData: any) => {
+                    if (challengeData?.type !== "select_image") return challengeData
+                    const payload = challengeData.payload || {}
+                    if (!Array.isArray(payload.options) || payload.options.length === 0) return challengeData
+                    const hydratedOptions = await Promise.all(
+                        payload.options.map(async (opt: any) => {
+                            const storagePath = getOptionStoragePath(opt)
+                            const hasRemoteUrl = typeof opt?.imageUrl === "string" && /^https?:\/\//i.test(opt.imageUrl)
+                            if (!storagePath || hasRemoteUrl) return { ...opt, imageStoragePath: storagePath }
+                            try {
+                                const res = await fetch("/api/library/signed-url", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ path: storagePath, expires: 60 * 15 }),
+                                })
+                                const json = await res.json()
+                                if (!res.ok) {
+                                    console.warn("No se pudo firmar la imagen (hydrate)", json?.error || res.status)
+                                    return { ...opt, imageStoragePath: storagePath }
+                                }
+                                if (json?.signedURL) {
+                                    return { ...opt, imageUrl: json.signedURL, imageStoragePath: storagePath }
+                                }
+                                return { ...opt, imageStoragePath: storagePath }
+                            } catch (error) {
+                                console.warn("No se pudo obtener la imagen del reto", error)
+                                return { ...opt, imageStoragePath: storagePath }
+                            }
+                        }),
+                    )
+                    return { ...challengeData, payload: { ...payload, options: hydratedOptions } }
+                }
+
+                const hydratedChallenge = await hydrateSelectImageOptions(data)
+
                 if (mounted) {
-                    setChallenge(data)
+                    setChallenge(hydratedChallenge)
                     // initialize default states from payload
-                    const payload = data.payload || {}
-                    if (data.type === "multiple_choice" && Array.isArray(payload.options) && payload.options.length > 0) {
+                    const payload = hydratedChallenge.payload || {}
+                    if (hydratedChallenge.type === "multiple_choice" && Array.isArray(payload.options) && payload.options.length > 0) {
                         setSelectedOptionId(payload.options[0].id || null)
                     }
-                    if (data.type === "fill_blank" && payload.prompt) {
-                        setFillText("")
+                    if (hydratedChallenge.type === "fill_blank") {
+                        const sections = Array.isArray(payload.sections) ? payload.sections : []
+                        if (sections.length > 0) {
+                            const initial: Record<string, string> = {}
+                            sections.forEach((section: any, index: number) => {
+                                const sectionId = section?.id || `section-${index}`
+                                initial[sectionId] = ""
+                            })
+                            setFillSectionAnswers(initial)
+                            setFillText("")
+                        } else {
+                            setFillSectionAnswers({})
+                            setFillText("")
+                        }
                     }
-                    if (data.type === "open_ended") setOpenText("")
-                    if (data.type === "matching" && Array.isArray(payload.pairs)) {
+                    if (hydratedChallenge.type === "open_ended") setOpenText("")
+                    if (hydratedChallenge.type === "matching" && Array.isArray(payload.pairs)) {
                         // default no matches
                         const map: Record<string, string> = {}
                         payload.pairs.forEach((p: any) => {
@@ -83,12 +147,12 @@ export default function StudentChallengePage() {
                         })
                         setMatchingMap(map)
                     }
-                    if (data.type === "sign_practice" && data.reference_video_storage_path) {
+                    if (hydratedChallenge.type === "sign_practice" && hydratedChallenge.reference_video_storage_path) {
                         try {
                             const res = await fetch("/api/library/signed-url", {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ path: data.reference_video_storage_path, expires: 60 * 60 }),
+                                body: JSON.stringify({ path: hydratedChallenge.reference_video_storage_path, expires: 60 * 60 }),
                             })
                             const json = await res.json()
                             if (json?.signedURL) setReferenceVideoUrl(json.signedURL)
@@ -105,15 +169,27 @@ export default function StudentChallengePage() {
                             .eq("challenge_id", challengeId)
                             .eq("student_id", currentUser.id)
                             .limit(1)
-                            .single()
-                        if (!respExisting.error && respExisting.data) {
+                            .maybeSingle()
+                        if (respExisting.data) {
                             setExistingResponse(respExisting.data)
                             // populate UI with previous answers if present
                             const prev = respExisting.data
-                            if (data.type === "multiple_choice" && prev.answers?.selected) setSelectedOptionId(prev.answers.selected)
-                            if (data.type === "fill_blank" && prev.answers?.text) setFillText(prev.answers.text)
-                            if (data.type === "open_ended" && prev.answers?.text) setOpenText(prev.answers.text)
-                            if (data.type === "matching" && Array.isArray(prev.answers?.matches)) {
+                            if (hydratedChallenge.type === "multiple_choice" && prev.answers?.selected) setSelectedOptionId(prev.answers.selected)
+                            if (hydratedChallenge.type === "fill_blank") {
+                                if (prev.answers?.text) setFillText(prev.answers.text)
+                                if (Array.isArray(prev.answers?.sections)) {
+                                    setFillSectionAnswers((current) => {
+                                        const next = { ...current }
+                                        prev.answers.sections.forEach((entry: any, index: number) => {
+                                            const sectionId = entry.sectionId || entry.id || `section-${index}`
+                                            next[sectionId] = entry.text || entry.value || ""
+                                        })
+                                        return next
+                                    })
+                                }
+                            }
+                            if (hydratedChallenge.type === "open_ended" && prev.answers?.text) setOpenText(prev.answers.text)
+                            if (hydratedChallenge.type === "matching" && Array.isArray(prev.answers?.matches)) {
                                 const mMap: Record<string, string> = {}
                                 prev.answers.matches.forEach((m: any) => {
                                     // support both older shape {pairId, right} and new {pairId, selectedId}
@@ -121,7 +197,7 @@ export default function StudentChallengePage() {
                                 })
                                 setMatchingMap(mMap)
                             }
-                            if (data.type === "sign_practice") {
+                            if (hydratedChallenge.type === "sign_practice") {
                                 if (prev.answers?.notes) setSignReflection(prev.answers.notes)
                                 if (prev.submission_transcript) setSignSubmissionTranscript(prev.submission_transcript)
                                 if (prev.submission_duration_seconds) setSignSubmissionDuration(String(prev.submission_duration_seconds))
@@ -169,6 +245,54 @@ export default function StudentChallengePage() {
         }
     }, [recordedPreviewUrl])
 
+    useEffect(() => {
+        setSelectImageSignedUrls({})
+        if (!challenge || challenge.type !== "select_image") return
+        const options = Array.isArray(challenge.payload?.options) ? challenge.payload.options : []
+        const needingSigned = options.filter((opt: any) => {
+            const storagePath = getOptionStoragePath(opt)
+            if (!storagePath) return false
+            const hasRemoteUrl = typeof opt?.imageUrl === "string" && /^https?:\/\//i.test(opt.imageUrl)
+            return !hasRemoteUrl
+        })
+        if (needingSigned.length === 0) return
+        let cancelled = false
+        const fetchSignedUrls = async () => {
+            const entries = await Promise.all(
+                needingSigned.map(async (opt: any) => {
+                    const storagePath = getOptionStoragePath(opt)
+                    if (!storagePath) return null
+                    try {
+                        const res = await fetch("/api/library/signed-url", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ path: storagePath, expires: 60 * 15 }),
+                        })
+                        const json = await res.json()
+                        if (!res.ok) {
+                            console.warn("No se pudo firmar la imagen", json?.error || res.status)
+                            return null
+                        }
+                        if (json?.signedURL) return [opt.id, json.signedURL] as const
+                    } catch (error) {
+                        console.warn("No se pudo firmar la imagen", error)
+                    }
+                    return null
+                }),
+            )
+            if (cancelled) return
+            const map: Record<string, string> = {}
+            entries.forEach((entry) => {
+                if (entry) map[entry[0]] = entry[1]
+            })
+            setSelectImageSignedUrls(map)
+        }
+        fetchSignedUrls()
+        return () => {
+            cancelled = true
+        }
+    }, [challenge?.id, challenge?.type])
+
     const sanitizeFilename = (name: string) =>
         name
             .toLowerCase()
@@ -182,6 +306,11 @@ export default function StudentChallengePage() {
         if (!challenge?.rubric || !Array.isArray(challenge.rubric)) return []
         return challenge.rubric
     }, [challenge?.rubric])
+
+    const resolveSelectImageSrc = (opt: any) => {
+        const storagePath = getOptionStoragePath(opt)
+        return selectImageSignedUrls[opt.id] || opt.imageUrl || buildStorageProxyUrl(storagePath)
+    }
 
     const startRecording = async () => {
         setRecordingError(null)
@@ -246,10 +375,15 @@ export default function StudentChallengePage() {
         })
     }
 
+    const handleFillSectionAnswerChange = (sectionId: string, value: string) => {
+        setFillSectionAnswers((prev) => ({ ...prev, [sectionId]: value }))
+    }
+
     const handleSubmit = async () => {
         if (!user) return router.push("/auth/login")
         if (!challenge) return
 
+        const isManualReview = challenge.type === "sign_practice"
         // build answers based on type
         let answers: any = {}
         const payload = challenge.payload || {}
@@ -261,8 +395,29 @@ export default function StudentChallengePage() {
             if (!selectedOptionId) return alert("Selecciona una opción")
             answers = { selected: selectedOptionId }
         } else if (challenge.type === "fill_blank") {
-            if (!fillText.trim()) return alert("Escribe la respuesta")
-            answers = { text: fillText }
+            const sections = Array.isArray(payload.sections) ? payload.sections : []
+            if (sections.length > 0) {
+                const missing = sections.find((section: any, idx: number) => {
+                    const sectionId = section.id || `section-${idx}`
+                    return !(fillSectionAnswers[sectionId]?.trim())
+                })
+                if (missing) {
+                    alert("Completa todas las respuestas para cada imagen")
+                    return
+                }
+                answers = {
+                    sections: sections.map((section: any, idx: number) => {
+                        const sectionId = section.id || `section-${idx}`
+                        return {
+                            sectionId,
+                            text: (fillSectionAnswers[sectionId] || "").trim(),
+                        }
+                    }),
+                }
+            } else {
+                if (!fillText.trim()) return alert("Escribe la respuesta")
+                answers = { text: fillText }
+            }
         } else if (challenge.type === "select_image") {
             if (!selectedOptionId) return alert("Selecciona la imagen correcta")
             answers = { selected: selectedOptionId }
@@ -326,12 +481,12 @@ export default function StudentChallengePage() {
                 submission_storage_path: submissionStoragePath,
                 submission_duration_seconds: submissionDurationSeconds,
                 submission_transcript: submissionTranscript,
-                review_status: challenge.type === "sign_practice" ? "pending" : undefined,
-                reviewer_id: challenge.type === "sign_practice" ? null : undefined,
-                reviewed_at: challenge.type === "sign_practice" ? null : undefined,
-                rubric_scores: challenge.type === "sign_practice" ? null : undefined,
-                teacher_feedback: challenge.type === "sign_practice" ? null : undefined,
-                score: challenge.type === "sign_practice" ? null : undefined,
+                review_status: isManualReview ? "pending" : "approved",
+                reviewer_id: isManualReview ? null : undefined,
+                reviewed_at: isManualReview ? null : undefined,
+                rubric_scores: isManualReview ? null : undefined,
+                teacher_feedback: isManualReview ? null : undefined,
+                score: isManualReview ? null : undefined,
             }
             let data, error
             if (existingResponse) {
@@ -396,24 +551,66 @@ export default function StudentChallengePage() {
                         </div>
                     )}
 
-                    {challenge.type === "fill_blank" && (
-                        <div>
-                            <p className="mb-2">{payload.prompt}</p>
-                            <Textarea value={fillText} onChange={(e) => setFillText(e.target.value)} />
-                        </div>
-                    )}
+                    {challenge.type === "fill_blank" && (() => {
+                        const sections = Array.isArray(payload.sections) ? payload.sections : []
+                        const promptImageSrc = getFillPromptImageSrc(payload)
+                        if (sections.length === 0) {
+                            return (
+                                <div className="space-y-3">
+                                    {payload.prompt && <p className="text-sm text-muted-foreground">{payload.prompt}</p>}
+                                    {promptImageSrc && <img src={promptImageSrc} alt="Referencia del ejercicio" className="rounded-md object-cover w-full max-h-64" />}
+                                    <Textarea value={fillText} onChange={(e) => setFillText(e.target.value)} placeholder="Escribe tu respuesta" />
+                                </div>
+                            )
+                        }
+                        return (
+                            <div className="space-y-4">
+                                {payload.prompt && <p className="text-sm text-muted-foreground">{payload.prompt}</p>}
+                                {promptImageSrc && <img src={promptImageSrc} alt="Referencia del ejercicio" className="rounded-md object-cover w-full max-h-64" />}
+                                <div className="space-y-3">
+                                    {sections.map((section: any, idx: number) => {
+                                        const sectionId = section.id || `section-${idx}`
+                                        const sectionImage = getFillImageSrc(section)
+                                        return (
+                                            <div key={sectionId} className="rounded-lg border p-3 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="font-medium text-sm">Segmento {idx + 1}</p>
+                                                    {section.label && <span className="text-xs text-muted-foreground">{section.label}</span>}
+                                                </div>
+                                                {sectionImage && (
+                                                    <img src={sectionImage} alt={section.label || `Imagen ${idx + 1}`} className="w-full rounded-md object-cover max-h-72" />
+                                                )}
+                                                <Textarea
+                                                    value={fillSectionAnswers[sectionId] ?? ""}
+                                                    onChange={(e) => handleFillSectionAnswerChange(sectionId, e.target.value)}
+                                                    placeholder="Describe la seña o escribe la palabra correspondiente"
+                                                />
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )
+                    })()}
 
                     {challenge.type === "select_image" && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {Array.isArray(payload.options) && payload.options.map((opt: any) => (
-                                <label key={opt.id} className="border p-2 rounded cursor-pointer">
-                                    <input className="mr-2" type="radio" name="select_image" checked={selectedOptionId === opt.id} onChange={() => setSelectedOptionId(opt.id)} />
-                                    <div className="flex items-center gap-2">
-                                        {opt.imageUrl ? <img src={opt.imageUrl} alt={opt.label} className="w-24 h-24 object-cover" /> : null}
-                                        <span>{opt.label}</span>
-                                    </div>
-                                </label>
-                            ))}
+                            {Array.isArray(payload.options) && payload.options.map((opt: any) => {
+                                const imageSrc = resolveSelectImageSrc(opt)
+                                return (
+                                    <label key={opt.id} className="border p-2 rounded cursor-pointer">
+                                        <input className="mr-2" type="radio" name="select_image" checked={selectedOptionId === opt.id} onChange={() => setSelectedOptionId(opt.id)} />
+                                        <div className="flex items-center gap-2">
+                                            {imageSrc ? (
+                                                <img src={imageSrc} alt={opt.label} className="w-24 h-24 rounded object-cover" />
+                                            ) : (
+                                                <div className="w-24 h-24 rounded bg-muted" />
+                                            )}
+                                            <span>{opt.label}</span>
+                                        </div>
+                                    </label>
+                                )
+                            })}
                         </div>
                     )}
 

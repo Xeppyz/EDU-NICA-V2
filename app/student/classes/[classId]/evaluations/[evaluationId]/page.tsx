@@ -12,6 +12,7 @@ import EvaluationRenderer from "@/components/evaluations/EvaluationRenderer"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { CheckCircle2, XCircle, AlertCircle } from "lucide-react"
+import { getEvaluationTypeLabel } from "@/lib/evaluations"
 
 interface Question {
     text: string
@@ -232,7 +233,7 @@ export default function EvaluationPage() {
                         {isQuiz ? (
                             <>Pregunta {currentQuestion + 1} de {evaluation.questions.length}</>
                         ) : (
-                            <>{evaluation.type ? `Tipo: ${evaluation.type}` : "Evaluación"}</>
+                            <>Tipo: {getEvaluationTypeLabel(evaluation.type)}</>
                         )}
                     </CardDescription>
                 </CardHeader>
@@ -437,15 +438,19 @@ export default function EvaluationPage() {
                                         })
                                     ) : (evaluation.type === "fill_blank") ? (
                                         // Fill-in-the-blank review
-                                        (evaluation.questions || []).map((q: any, i: number) => (
-                                            <div key={q.id || i} className="p-4 rounded-lg border">
-                                                <p className="font-medium mb-2">{q.prompt || q.text || `Entrada ${i + 1}`}</p>
-                                                <div className="space-y-1 text-sm">
-                                                    <p>Respuesta esperada: <span className="text-green-600">{(q.answer || (q.blanks && q.blanks[0]) || "-")}</span></p>
-                                                    <p>Tu respuesta: <span className="font-medium">{(savedAnswers && savedAnswers[i]) || "(sin respuesta)"}</span></p>
+                                        (evaluation.questions || []).map((q: any, i: number) => {
+                                            const imageSrc = q?.imageUrl ? q.imageUrl : q?.imageStoragePath ? `/api/library/object?path=${encodeURIComponent(q.imageStoragePath)}` : q?.image_storage_path ? `/api/library/object?path=${encodeURIComponent(q.image_storage_path)}` : null
+                                            return (
+                                                <div key={q.id || i} className="p-4 rounded-lg border space-y-3">
+                                                    <p className="font-medium">{q.prompt || q.text || `Entrada ${i + 1}`}</p>
+                                                    {imageSrc && <img src={imageSrc} alt={q.prompt || `Entrada ${i + 1}`} className="w-full rounded-md object-cover max-h-60" />}
+                                                    <div className="space-y-1 text-sm">
+                                                        <p>Respuesta esperada: <span className="text-green-600">{(q.answer || (q.blanks && q.blanks[0]) || "-")}</span></p>
+                                                        <p>Tu respuesta: <span className="font-medium">{(savedAnswers && savedAnswers[i]) || "(sin respuesta)"}</span></p>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))
+                                            )
+                                        })
                                     ) : (evaluation.type === "matching") ? (
                                         // Matching review
                                         (() => {

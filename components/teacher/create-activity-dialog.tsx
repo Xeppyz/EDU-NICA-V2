@@ -129,12 +129,12 @@ export function CreateActivityDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="quiz">Cuestionario</SelectItem>
-                <SelectItem value="exercise">Ejercicio</SelectItem>
-                <SelectItem value="reading">Lectura</SelectItem>
-                <SelectItem value="fill_blank">Fill-in-the-Blank</SelectItem>
-                <SelectItem value="matching">Matching</SelectItem>
-                <SelectItem value="dragdrop">Drag & Drop</SelectItem>
-                <SelectItem value="coding">Coding</SelectItem>
+                <SelectItem value="exercise">Ejercicio guiado</SelectItem>
+                <SelectItem value="reading">Lectura guiada</SelectItem>
+                <SelectItem value="fill_blank">Completar espacios</SelectItem>
+                <SelectItem value="matching">Emparejar</SelectItem>
+                <SelectItem value="dragdrop">Arrastrar y soltar</SelectItem>
+                <SelectItem value="coding">Programación</SelectItem>
               </SelectContent>
             </Select>
           </div>

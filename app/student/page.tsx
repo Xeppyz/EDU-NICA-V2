@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { BookOpen, Users } from "lucide-react"
 import JoinClassDialog from "@/components/student/join-class-dialog"
+import { getChallengeTypeLabel } from "@/lib/challenges"
 
 
 interface EnrolledClass {
@@ -165,7 +166,7 @@ export default function StudentDashboard() {
                   <CardDescription>{ch.classes?.name || "Clase"}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-muted-foreground">Tipo: {ch.type}</p>
+                  <p className="text-sm text-muted-foreground">Tipo: {getChallengeTypeLabel(ch.type)}</p>
                   {ch.due_at && <p className="text-sm text-destructive">Vence: {new Date(ch.due_at).toLocaleString()}</p>}
                 </CardContent>
               </Card>

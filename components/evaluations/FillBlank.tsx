@@ -14,6 +14,12 @@ export default function FillBlankRenderer({ evaluation, onSubmit }: Props) {
     const [answers, setAnswers] = useState<string[]>(questions.map(() => ""))
     const [loading, setLoading] = useState(false)
 
+    const getImageSrc = (q: any) => {
+        if (typeof q?.imageUrl === "string" && q.imageUrl.trim()) return q.imageUrl
+        const storagePath = q?.imageStoragePath || q?.image_storage_path
+        return storagePath ? `/api/library/object?path=${encodeURIComponent(storagePath)}` : null
+    }
+
     const handleChange = (idx: number, value: string) => {
         setAnswers((prev) => {
             const next = [...prev]
@@ -45,12 +51,16 @@ export default function FillBlankRenderer({ evaluation, onSubmit }: Props) {
 
     return (
         <form onSubmit={handleSubmit} className="space-y-4">
-            {questions.map((q: any, i: number) => (
-                <div key={q.id || i}>
-                    <label className="block text-sm font-medium mb-1">{q.prompt}</label>
-                    <Input value={answers[i]} onChange={(e) => handleChange(i, e.target.value)} />
-                </div>
-            ))}
+            {questions.map((q: any, i: number) => {
+                const imageSrc = getImageSrc(q)
+                return (
+                    <div key={q.id || i} className="space-y-2">
+                        <label className="block text-sm font-medium">{q.prompt}</label>
+                        {imageSrc && <img src={imageSrc} alt={q.prompt || `Entrada ${i + 1}`} className="w-full rounded-md object-cover max-h-64" />}
+                        <Input value={answers[i]} onChange={(e) => handleChange(i, e.target.value)} placeholder="Escribe tu respuesta" />
+                    </div>
+                )
+            })}
 
             <div className="flex justify-end">
                 <Button type="submit" disabled={loading} className="bg-gradient-to-r from-purple-600 to-pink-600">

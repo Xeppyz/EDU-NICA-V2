@@ -12,6 +12,19 @@ import { BookOpen, PlayCircle, FileText, CheckCircle2 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ClipboardList, Zap } from "lucide-react"
 
+const DIRECT_VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".ogg"]
+
+const isDirectVideoAsset = (url: string | null) => {
+  if (!url) return false
+  const trimmed = url.trim()
+  if (!trimmed) return false
+  const cleanUrl = trimmed.split("?")[0]?.split("#")[0]?.toLowerCase() ?? ""
+  if (!cleanUrl) return false
+  if (cleanUrl.startsWith("/api/library/object")) return true
+  if (cleanUrl.includes("/storage/v1/object/")) return true
+  return DIRECT_VIDEO_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext))
+}
+
 interface Lesson {
   id: string
   title: string
@@ -190,6 +203,8 @@ export default function StudentClassPage() {
       .map((e: any) => e.id)
   }, [evaluations, myResponses])
 
+  const selectedLessonVideoUrl = selectedLesson?.video_url?.trim() || null
+
   // DEBUG: log runtime values so we can inspect in browser console
   // Remove these logs once the issue is diagnosed
   if (typeof window !== "undefined") {
@@ -313,19 +328,30 @@ export default function StudentClassPage() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      {selectedLesson.video_url ? (
-                        <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-                          <iframe
-                            width="100%"
-                            height="100%"
-                            src={toEmbedUrl(selectedLesson.video_url) || selectedLesson.video_url}
-                            title={selectedLesson.title}
-                            frameBorder="0"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                            allowFullScreen
-                            className="rounded-lg"
-                          />
-                        </div>
+                      {selectedLessonVideoUrl ? (
+                        isDirectVideoAsset(selectedLessonVideoUrl) ? (
+                          <div className="aspect-video bg-black rounded-lg overflow-hidden">
+                            <video
+                              className="w-full h-full"
+                              controls
+                              preload="metadata"
+                              src={selectedLessonVideoUrl}
+                            />
+                          </div>
+                        ) : (
+                          <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
+                            <iframe
+                              width="100%"
+                              height="100%"
+                              src={toEmbedUrl(selectedLessonVideoUrl) || selectedLessonVideoUrl}
+                              title={selectedLesson.title}
+                              frameBorder="0"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen
+                              className="rounded-lg"
+                            />
+                          </div>
+                        )
                       ) : (
                         <div className="aspect-video bg-muted rounded-lg flex items-center justify-center text-muted-foreground">
                           Sin video disponible

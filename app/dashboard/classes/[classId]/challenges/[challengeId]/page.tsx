@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { getChallengeTypeLabel } from "@/lib/challenges"
 
 const statusLabels: Record<string, string> = {
     pending: "Pendiente",
@@ -55,6 +56,170 @@ export default function ChallengeReviewPage() {
     }, [challenge?.rubric])
 
     const awardedRubricPoints = useMemo(() => Object.values(rubricScoreInputs).reduce((acc, val) => acc + (Number(val) || 0), 0), [rubricScoreInputs])
+
+    const getOptionImageSrc = (option: any) => {
+        if (!option) return null
+        if (typeof option.imageUrl === "string" && option.imageUrl.trim()) return option.imageUrl
+        const storagePath = option.imageStoragePath || option.image_storage_path
+        if (!storagePath) return null
+        return `/api/library/object?path=${encodeURIComponent(storagePath)}`
+    }
+
+    const getFillPromptImageSrc = (payload: any) => {
+        if (!payload) return null
+        if (typeof payload.promptImageUrl === "string" && payload.promptImageUrl.trim()) return payload.promptImageUrl
+        const storagePath = payload.promptImageStoragePath || payload.prompt_image_storage_path
+        if (!storagePath) return null
+        return `/api/library/object?path=${encodeURIComponent(storagePath)}`
+    }
+
+    const getFillSectionImageSrc = (section: any) => {
+        if (!section) return null
+        if (typeof section.imageUrl === "string" && section.imageUrl.trim()) return section.imageUrl
+        const storagePath = section.imageStoragePath || section.image_storage_path
+        if (!storagePath) return null
+        return `/api/library/object?path=${encodeURIComponent(storagePath)}`
+    }
+
+    const renderAnswerDetails = () => {
+        if (!selectedResponse || !challenge) return null
+        const answers = selectedResponse.answers || {}
+        const payload = challenge.payload || {}
+
+        if (challenge.type === "multiple_choice") {
+            const options = Array.isArray(payload.options) ? payload.options : []
+            const selected = options.find((opt: any) => opt.id === answers.selected)
+            return (
+                <div>
+                    <p className="text-sm font-medium">Respuesta seleccionada</p>
+                    {selected ? (
+                        <div className="mt-2 rounded border p-2">
+                            <p className="font-medium">{selected.text || selected.label || "(sin texto)"}</p>
+                            <p className="text-xs text-muted-foreground">ID: {selected.id}</p>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">El estudiante no seleccionó una opción.</p>
+                    )}
+                </div>
+            )
+        }
+
+        if (challenge.type === "select_image") {
+            const options = Array.isArray(payload.options) ? payload.options : []
+            const selected = options.find((opt: any) => opt.id === answers.selected)
+            return (
+                <div>
+                    <p className="text-sm font-medium">Imagen seleccionada</p>
+                    {selected ? (
+                        <div className="mt-2 flex items-center gap-3 rounded border p-2">
+                            {(() => {
+                                const src = getOptionImageSrc(selected)
+                                return src ? (
+                                    <img src={src} alt={selected.label || "Imagen seleccionada"} className="h-20 w-20 rounded object-cover" />
+                                ) : (
+                                    <div className="h-20 w-20 rounded bg-muted" />
+                                )
+                            })()}
+                            <div>
+                                <p className="font-medium">{selected.label || "(sin etiqueta)"}</p>
+                                {selected.imageUrl && (
+                                    <p className="text-xs text-muted-foreground truncate max-w-[14rem]">{selected.imageUrl}</p>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">El estudiante no seleccionó ninguna imagen.</p>
+                    )}
+                </div>
+            )
+        }
+
+        if (challenge.type === "fill_blank") {
+            const sections = Array.isArray(payload.sections) ? payload.sections : []
+            const sectionAnswers = Array.isArray(answers.sections) ? answers.sections : []
+            if (sections.length === 0) {
+                return (
+                    <div>
+                        <p className="text-sm font-medium">Texto ingresado</p>
+                        <p className="mt-2 rounded border bg-muted/30 p-2 text-sm whitespace-pre-wrap">{answers.text || "(sin respuesta)"}</p>
+                    </div>
+                )
+            }
+            return (
+                <div className="space-y-3">
+                    <p className="text-sm font-medium">Respuestas por imagen</p>
+                    {sections.map((section: any, index: number) => {
+                        const sectionId = section.id || `section-${index}`
+                        const sectionImage = getFillSectionImageSrc(section)
+                        const response = sectionAnswers.find((entry: any, entryIdx: number) => {
+                            const answerId = entry.sectionId || entry.id || `section-${entryIdx}`
+                            return answerId === sectionId
+                        })
+                        return (
+                            <div key={sectionId} className="rounded border p-3 space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-sm font-semibold">Segmento {index + 1}</p>
+                                    {section.label && <span className="text-xs text-muted-foreground">{section.label}</span>}
+                                </div>
+                                {sectionImage && <img src={sectionImage} alt={section.label || `Segmento ${index + 1}`} className="w-full rounded-md object-cover max-h-64" />}
+                                <p className="text-sm text-muted-foreground">Respuesta del estudiante:</p>
+                                <p className="rounded bg-muted/30 p-2 text-sm whitespace-pre-wrap">{response?.text || "(sin respuesta)"}</p>
+                            </div>
+                        )
+                    })}
+                </div>
+            )
+        }
+
+        if (challenge.type === "matching") {
+            const pairs = Array.isArray(payload.pairs) ? payload.pairs : []
+            const pairMap = new Map<string, { left?: string; right?: string }>(
+                pairs.map((pair: any) => [pair.id, { left: pair.left, right: pair.right }]),
+            )
+            const matches = Array.isArray(answers.matches) ? answers.matches : []
+            return (
+                <div className="space-y-2">
+                    <p className="text-sm font-medium">Correspondencias realizadas</p>
+                    {matches.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">El estudiante no envió emparejamientos.</p>
+                    ) : (
+                        <div className="space-y-1">
+                            {matches.map((match: any) => {
+                                const leftPair = pairMap.get(match.pairId)
+                                const selectedPair = pairMap.get(match.right) || pairMap.get(match.selectedId)
+                                return (
+                                    <div key={`${match.pairId}-${match.right}`} className="rounded border p-2 text-sm">
+                                        <p className="font-semibold">{leftPair?.left || match.pairId}</p>
+                                        <p className="text-muted-foreground text-sm">→ {selectedPair?.right || match.right || "(sin selección)"}</p>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    )}
+                </div>
+            )
+        }
+
+        if (challenge.type === "open_ended") {
+            return (
+                <div>
+                    <p className="text-sm font-medium">Respuesta abierta</p>
+                    <p className="mt-2 rounded border bg-muted/30 p-2 text-sm whitespace-pre-wrap">{answers.text || "(sin respuesta)"}</p>
+                </div>
+            )
+        }
+
+        if (challenge.type === "sign_practice") {
+            return (
+                <div>
+                    <p className="text-sm font-medium">Notas del estudiante</p>
+                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">{answers.notes || "(sin notas)"}</p>
+                </div>
+            )
+        }
+
+        return null
+    }
 
     useEffect(() => {
         const load = async () => {
@@ -270,7 +435,7 @@ export default function ChallengeReviewPage() {
                 <Card className="lg:col-span-1">
                     <CardHeader>
                         <CardTitle>Detalles del reto</CardTitle>
-                        <CardDescription>Tipo: {challenge.type}</CardDescription>
+                        <CardDescription>Tipo: {getChallengeTypeLabel(challenge.type)}</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {challenge.payload?.prompt && (
@@ -279,6 +444,35 @@ export default function ChallengeReviewPage() {
                                 <p className="text-sm text-muted-foreground whitespace-pre-wrap">{challenge.payload.prompt}</p>
                             </div>
                         )}
+                        {challenge.type === "fill_blank" && (() => {
+                            const promptImage = getFillPromptImageSrc(challenge.payload || {})
+                            const sections = Array.isArray(challenge.payload?.sections) ? challenge.payload.sections : []
+                            return (
+                                <div className="space-y-3">
+                                    {promptImage && <img src={promptImage} alt="Imagen del enunciado" className="w-full rounded-md object-cover max-h-64" />}
+                                    {sections.length > 0 && (
+                                        <div className="space-y-2">
+                                            <p className="text-sm font-medium">Segmentos visuales</p>
+                                            <div className="grid gap-2 sm:grid-cols-2">
+                                                {sections.map((section: any, index: number) => {
+                                                    const sectionImage = getFillSectionImageSrc(section)
+                                                    return (
+                                                        <div key={section.id || index} className="rounded border p-2 text-sm">
+                                                            <p className="font-semibold">{section.label || `Segmento ${index + 1}`}</p>
+                                                            {sectionImage ? (
+                                                                <img src={sectionImage} alt={section.label || `Segmento ${index + 1}`} className="mt-2 h-32 w-full rounded object-cover" />
+                                                            ) : (
+                                                                <p className="text-xs text-muted-foreground mt-2">Sin imagen adjunta</p>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )
+                        })()}
                         {challenge.payload?.tips && (
                             <div>
                                 <p className="text-sm font-medium">Tips</p>
@@ -382,57 +576,56 @@ export default function ChallengeReviewPage() {
                         )}
                     </DialogHeader>
                     <div className="space-y-4">
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                            <div>
-                                <p className="text-sm font-medium mb-1">Video del estudiante</p>
-                                {videoLoading ? (
-                                    <div className="h-48 rounded border border-dashed bg-muted animate-pulse" />
-                                ) : submissionVideoUrl ? (
-                                    <div className="space-y-2">
-                                        <video controls className="w-full rounded border" src={submissionVideoUrl} />
-                                        <div className="flex flex-wrap gap-2">
-                                            <Button type="button" variant="secondary" size="sm" onClick={() => window.open(submissionVideoUrl || "", "_blank")}>Abrir en pestaña</Button>
-                                            <Button type="button" variant="ghost" size="sm" asChild>
-                                                <a href={submissionVideoUrl} download>
-                                                    Descargar
-                                                </a>
-                                            </Button>
+                        {challenge.type === "sign_practice" && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-sm font-medium mb-1">Video del estudiante</p>
+                                    {videoLoading ? (
+                                        <div className="h-48 rounded border border-dashed bg-muted animate-pulse" />
+                                    ) : submissionVideoUrl ? (
+                                        <div className="space-y-2">
+                                            <video controls className="w-full rounded border" src={submissionVideoUrl} />
+                                            <div className="flex flex-wrap gap-2">
+                                                <Button type="button" variant="secondary" size="sm" onClick={() => window.open(submissionVideoUrl || "", "_blank")}>Abrir en pestaña</Button>
+                                                <Button type="button" variant="ghost" size="sm" asChild>
+                                                    <a href={submissionVideoUrl} download>
+                                                        Descargar
+                                                    </a>
+                                                </Button>
+                                            </div>
                                         </div>
+                                    ) : selectedResponse?.submission_storage_path ? (
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-muted-foreground">
+                                                {videoError || "Cargando video firmado…"}
+                                            </p>
+                                            {videoError && (
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => selectedResponse?.submission_storage_path && fetchSubmissionVideo(selectedResponse.submission_storage_path)}
+                                                >
+                                                    Reintentar
+                                                </Button>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground">Este estudiante aún no adjunta un video.</p>
+                                    )}
+                                </div>
+                                {referenceVideoUrl && (
+                                    <div>
+                                        <p className="text-sm font-medium mb-1">Video de referencia</p>
+                                        <video controls className="w-full rounded border" src={referenceVideoUrl} />
                                     </div>
-                                ) : selectedResponse?.submission_storage_path ? (
-                                    <div className="space-y-2">
-                                        <p className="text-sm text-muted-foreground">
-                                            {videoError || "Cargando video firmado…"}
-                                        </p>
-                                        {videoError && (
-                                            <Button
-                                                type="button"
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => selectedResponse?.submission_storage_path && fetchSubmissionVideo(selectedResponse.submission_storage_path)}
-                                            >
-                                                Reintentar
-                                            </Button>
-                                        )}
-                                    </div>
-                                ) : (
-                                    <p className="text-sm text-muted-foreground">Este estudiante aún no adjunta un video.</p>
                                 )}
                             </div>
-                            {referenceVideoUrl && (
-                                <div>
-                                    <p className="text-sm font-medium mb-1">Video de referencia</p>
-                                    <video controls className="w-full rounded border" src={referenceVideoUrl} />
-                                </div>
-                            )}
-                        </div>
+                        )}
 
-                        <div>
-                            <p className="text-sm font-medium">Notas del estudiante</p>
-                            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{selectedResponse?.answers?.notes || "(sin notas)"}</p>
-                        </div>
+                        <div>{renderAnswerDetails()}</div>
 
-                        {rubricCriteria.length > 0 && (
+                        {challenge.type === "sign_practice" && rubricCriteria.length > 0 && (
                             <div className="space-y-2">
                                 <p className="text-sm font-medium">Rúbrica</p>
                                 {rubricCriteria.map((crit: any) => {

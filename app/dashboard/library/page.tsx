@@ -6,7 +6,16 @@ import { getCurrentUser } from "@/lib/supabase/auth-client"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { FileText, BookOpen, Play, Trash2 } from "lucide-react"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { BookOpen, Trash2, Pencil } from "lucide-react"
 import VideoModal from "@/components/student/video-modal"
 
 interface Material {
@@ -17,6 +26,7 @@ interface Material {
     storage_path?: string
     file_type?: string
     display_url?: string
+    uploaded_by?: string | null
 }
 
 function isYouTube(url?: string) {
@@ -46,6 +56,17 @@ export default function DashboardLibraryPage() {
     const [materials, setMaterials] = useState<Material[]>([])
     const [loading, setLoading] = useState(true)
     const [user, setUser] = useState<any>(null)
+    const [editingMaterial, setEditingMaterial] = useState<Material | null>(null)
+    const [editTitle, setEditTitle] = useState("")
+    const [editDescription, setEditDescription] = useState("")
+    const [savingEdit, setSavingEdit] = useState(false)
+    const [editError, setEditError] = useState<string | null>(null)
+
+    const canManageMaterial = (material: Material) => {
+        if (!user) return false
+        if (user.role === 'admin' || user.role === 'teacher') return true
+        return material.uploaded_by === user.id
+    }
 
     useEffect(() => {
         async function load() {
@@ -96,6 +117,10 @@ export default function DashboardLibraryPage() {
     }, [router])
 
     const handleDelete = async (m: Material) => {
+        if (!canManageMaterial(m)) {
+            alert('No tienes permisos para eliminar este material')
+            return
+        }
         if (!confirm('¿Eliminar este material? Esta acción eliminará el registro y el archivo del storage.')) return
         try {
             const supabase = getSupabaseClient()
@@ -108,6 +133,83 @@ export default function DashboardLibraryPage() {
         } catch (e) {
             console.error('Error deleting material', e)
             alert('No se pudo eliminar el material')
+        }
+    }
+
+    const openEditDialog = (material: Material) => {
+        if (!canManageMaterial(material)) {
+            alert('No tienes permisos para editar este material')
+            return
+        }
+        setEditingMaterial(material)
+        setEditTitle(material.title)
+        setEditDescription(material.description || "")
+        setEditError(null)
+    }
+
+    const closeEditDialog = () => {
+        if (savingEdit) return
+        setEditingMaterial(null)
+        setEditTitle("")
+        setEditDescription("")
+        setEditError(null)
+    }
+
+    const handleEditSubmit = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!editingMaterial) return
+
+        // Validación básica de UI
+        if (!canManageMaterial(editingMaterial)) {
+            setEditError('No tienes permisos para editar este material')
+            return
+        }
+
+        setSavingEdit(true)
+        setEditError(null)
+
+        try {
+            const supabase = getSupabaseClient()
+            const trimmedTitle = editTitle.trim()
+
+            if (!trimmedTitle) {
+                throw new Error('El título es obligatorio')
+            }
+
+            const trimmedDescription = editDescription.trim()
+
+            // ACTUALIZACIÓN OPTIMIZADA
+            // Usamos .select() al final para obtener el registro actualizado en una sola llamada.
+            const { data, error } = await supabase
+                .from('library_materials')
+                .update({
+                    title: trimmedTitle,
+                    description: trimmedDescription || null
+                })
+                .eq('id', editingMaterial.id)
+                .select() // Esto devuelve el registro actualizado
+                .single()
+
+            if (error) throw error
+
+            // Si data es null, significa que RLS bloqueó la actualización (silenciosamente)
+            if (!data) throw new Error("No tienes permiso para editar este registro.")
+
+            // Actualizar el estado local con los nuevos datos reales
+            setMaterials((prev) =>
+                prev.map((mat) =>
+                    mat.id === editingMaterial.id
+                        ? { ...mat, title: data.title, description: data.description || undefined }
+                        : mat,
+                ),
+            )
+
+            closeEditDialog()
+        } catch (err: any) {
+            console.error('Error updating material', err)
+            setEditError(err?.message || 'No se pudo actualizar el material')
+        } finally {
+            setSavingEdit(false)
         }
     }
 
@@ -154,13 +256,50 @@ export default function DashboardLibraryPage() {
                                         <Button variant="ghost" size="sm" disabled>Sin enlace</Button>
                                     )}
 
-                                    <Button variant="destructive" size="sm" onClick={() => handleDelete(m)}><Trash2 className="w-4 h-4" /></Button>
+                                    {canManageMaterial(m) && (
+                                        <>
+                                            <Button variant="secondary" size="sm" onClick={() => openEditDialog(m)}>
+                                                <Pencil className="w-4 h-4" />
+                                            </Button>
+                                            <Button variant="destructive" size="sm" onClick={() => handleDelete(m)}>
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </Card>
                     ))}
                 </div>
             )}
+
+            <Dialog open={!!editingMaterial} onOpenChange={(open) => (!open ? closeEditDialog() : undefined)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Editar material</DialogTitle>
+                        <DialogDescription>Actualiza el título o la descripción del recurso.</DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleEditSubmit} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium">Título</label>
+                            <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} disabled={savingEdit} required />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium">Descripción</label>
+                            <Textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={4} disabled={savingEdit} />
+                        </div>
+                        {editError && <p className="text-sm text-destructive">{editError}</p>}
+                        <div className="flex justify-end gap-2">
+                            <Button type="button" variant="outline" onClick={closeEditDialog} disabled={savingEdit}>
+                                Cancelar
+                            </Button>
+                            <Button type="submit" disabled={savingEdit}>
+                                {savingEdit ? 'Guardando...' : 'Guardar cambios'}
+                            </Button>
+                        </div>
+                    </form>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

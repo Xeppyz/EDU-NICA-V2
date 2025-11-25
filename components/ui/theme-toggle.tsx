@@ -20,7 +20,7 @@ export default function ThemeToggle({ className }: { className?: string }) {
         <div className={cn("flex items-center justify-between w-full", className)}>
             <div className="flex items-center gap-2">
                 <Sun className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm">Dark Mode</span>
+                <span className="text-sm">{isDark ? "Modo oscuro" : "Modo claro"}</span>
             </div>
             <div className="flex items-center gap-2">
                 <Moon className="w-4 h-4 text-muted-foreground" />
