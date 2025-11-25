@@ -22,7 +22,7 @@ import {
   SidebarInset,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
-import { BookOpen, LogOut, GraduationCap, Trophy } from "lucide-react"
+import { BookOpen, LogOut, GraduationCap, Trophy, Settings } from "lucide-react"
 import ThemeToggle from '@/components/ui/theme-toggle'
 import PendingEvaluationsCalendar from '@/components/student/pending-evaluations-calendar'
 
@@ -240,8 +240,17 @@ export default function StudentLayout({
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild>
-                    <div>
+                    <a href="/student/settings">
+                      <Settings className="w-4 h-4" />
+                      <span>Ajustes de Cuenta</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <div className="flex items-center gap-2">
                       <ThemeToggle />
+                      <span className="text-sm">Tema</span>
                     </div>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

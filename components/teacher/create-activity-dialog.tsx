@@ -33,7 +33,7 @@ export function CreateActivityDialog({
 }: CreateActivityDialogProps) {
   const [title, setTitle] = useState("")
   const [type, setType] = useState<
-    "quiz" | "exercise" | "reading" | "fill_blank" | "matching" | "dragdrop" | "coding"
+    "quiz" | "exercise" | "reading" | "fill_blank" | "matching" | "dragdrop"
   >("quiz")
   const [lessonId, setLessonId] = useState("")
   const [description, setDescription] = useState("")
@@ -129,12 +129,9 @@ export function CreateActivityDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="quiz">Cuestionario</SelectItem>
-                <SelectItem value="exercise">Ejercicio guiado</SelectItem>
-                <SelectItem value="reading">Lectura guiada</SelectItem>
                 <SelectItem value="fill_blank">Completar espacios</SelectItem>
                 <SelectItem value="matching">Emparejar</SelectItem>
                 <SelectItem value="dragdrop">Arrastrar y soltar</SelectItem>
-                <SelectItem value="coding">Programación</SelectItem>
               </SelectContent>
             </Select>
           </div>

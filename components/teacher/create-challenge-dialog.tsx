@@ -393,7 +393,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                     description: crit.description.trim(),
                 }))
                 .filter((crit) => crit.label && crit.weight > 0)
-            if (normalizedRubric.length === 0) throw new Error("Agrega al menos un criterio de rúbrica con peso mayor a 0")
+            if (normalizedRubric.length === 0) throw new Error("Agrega al menos un criterio de rúbrica con nota mayor a 0")
             const parsedMaxScore = Number(signMaxScore)
             if (Number.isNaN(parsedMaxScore) || parsedMaxScore <= 0) throw new Error("Ingresa una puntuación máxima válida")
             let referenceVideoDurationSeconds: number | null = null
@@ -852,7 +852,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                             </div>
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                    <label className="text-sm font-medium">Rúbrica (peso total {totalRubricWeight})</label>
+                                    <label className="text-sm font-medium">Rúbrica (Calificacion final {totalRubricWeight})</label>
                                     <Button type="button" variant="ghost" size="sm" onClick={() => setRubricCriteria((prev) => [...prev, { id: `crit-${Date.now()}`, label: "Nuevo criterio", weight: 10, description: "" }])}>
                                         Añadir criterio
                                     </Button>
@@ -872,7 +872,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                                                     min="0"
                                                     value={crit.weight}
                                                     onChange={(e) => setRubricCriteria((prev) => prev.map((c, i) => (i === idx ? { ...c, weight: Number(e.target.value) } : c)))}
-                                                    placeholder="Peso"
+                                                    placeholder="Nota"
                                                 />
                                             </div>
                                             <Textarea
@@ -896,7 +896,7 @@ export default function CreateChallengeDialog({ classId, onChallengeCreated, ope
                                         </div>
                                     ))}
                                 </div>
-                                <p className="text-xs text-muted-foreground">Asegúrate de que la suma de pesos cubra el total esperado (sugerido 100).</p>
+                                <p className="text-xs text-muted-foreground">Asegúrate de que la suma de notas cubra el total esperado (sugerido 100).</p>
                             </div>
                         </div>
                     )}

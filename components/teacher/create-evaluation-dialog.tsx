@@ -75,7 +75,7 @@ export function CreateEvaluationDialog({
   onOpenChange,
   onEvaluationCreated,
 }: CreateEvaluationDialogProps) {
-  const evaluationTypeOrder = ["quiz", "fill_blank", "matching", "dragdrop", "coding"]
+  const evaluationTypeOrder = ["quiz", "fill_blank", "matching", "dragdrop"]
   const [title, setTitle] = useState("")
   const [questions, setQuestions] = useState<Question[]>([])
   // Type-specific state

@@ -3,7 +3,6 @@ export const EVALUATION_TYPE_LABELS: Record<string, string> = {
     fill_blank: "Completar espacios",
     matching: "Emparejar",
     dragdrop: "Arrastrar y soltar",
-    coding: "Código",
 }
 
 export function getEvaluationTypeLabel(type?: string | null) {

@@ -7,7 +7,15 @@ import Image from "next/image"
 import log from '../../../public/logo_edunica.png'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { signIn, getCurrentUser } from "@/lib/supabase/auth-client"
+import { getSupabaseClient } from "@/lib/supabase/client"
 import { demoUsers } from "@/lib/demo-users"
 
 export default function LoginPage() {
@@ -16,6 +24,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  const [resetEmail, setResetEmail] = useState("")
+  const [resetMessage, setResetMessage] = useState<string | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetDialogOpen, setResetDialogOpen] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -40,6 +53,35 @@ export default function LoginPage() {
       } else {
         router.push("/student")
       }
+    }
+  }
+
+  async function handlePasswordReset(e: React.FormEvent) {
+    e.preventDefault()
+    setResetMessage(null)
+    setResetError(null)
+
+    const targetEmail = (resetEmail || email).trim()
+    if (!targetEmail) {
+      setResetError("Ingresa tu correo para enviar el enlace.")
+      return
+    }
+
+    try {
+      setResetLoading(true)
+      const supabase = getSupabaseClient()
+      const origin = typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_SITE_URL || ""
+      const redirectTo = origin ? `${origin}/auth/reset` : undefined
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+        redirectTo,
+      })
+      if (resetErr) throw resetErr
+      setResetMessage("Enviamos un enlace de restablecimiento a tu correo.")
+    } catch (err: any) {
+      console.error("Password reset error", err)
+      setResetError(err?.message || "No se pudo enviar el enlace de restablecimiento.")
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -132,7 +174,7 @@ export default function LoginPage() {
             <p className="text-gray-600">Ingresa a tu cuenta para continuar</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-1 mb-6">
+          <form onSubmit={handleSubmit} className="space-y-1 mb-4">
             <div>
               <label htmlFor="email" className="block text-sm font-semibold text-gray-700 mb-2">
                 Correo Electrónico
@@ -177,8 +219,46 @@ export default function LoginPage() {
               {loading ? "Iniciando..." : "Iniciar Sesión"}
             </Button>
           </form>
+          <div className="text-right">
+            <button
+              type="button"
+              className="text-sm font-medium text-purple-600 hover:text-purple-700"
+              onClick={() => setResetDialogOpen(true)}
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
         </div>
       </div>
+
+      <Dialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restablecer contraseña</DialogTitle>
+            <DialogDescription>Ingresa tu correo y te enviaremos un enlace para crear una nueva contraseña.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handlePasswordReset} className="space-y-3 mt-2">
+            <Input
+              type="email"
+              value={resetEmail}
+              onChange={(e) => setResetEmail(e.target.value)}
+              placeholder="tu@correo.com"
+              disabled={resetLoading}
+              required
+            />
+            {resetError && <p className="text-sm text-red-600">{resetError}</p>}
+            {resetMessage && <p className="text-sm text-emerald-600">{resetMessage}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setResetDialogOpen(false)} disabled={resetLoading}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={resetLoading}>
+                {resetLoading ? "Enviando..." : "Enviar enlace"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
